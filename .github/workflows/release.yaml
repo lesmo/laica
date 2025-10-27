@@ -12,7 +12,7 @@ jobs:
     container:
       image: ghcr.io/sunnypilot/sunnypilot-base:latest
     runs-on: ubuntu-latest
-    if: github.repository == 'sunnypilot/sunnypilot'
+    if: false  # Disabled
     permissions:
       checks: read
       contents: write
