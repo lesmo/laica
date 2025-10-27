@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   update_release_draft:
+    if: false  # Disabled: update_release_draft job
     permissions:
       contents: write
       pull-requests: write
