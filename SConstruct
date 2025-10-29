@@ -375,6 +375,9 @@ if Dir('#tools/cabana/').exists() and GetOption('extras'):
   if arch != "larch64":
     SConscript(['tools/cabana/SConscript'])
 
+# Build laica extensions (e.g., potholed model converters)
+SConscript(['laica/SConscript'])
+
 external_sconscript = GetOption('external_sconscript')
 if external_sconscript:
   SConscript([external_sconscript])

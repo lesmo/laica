@@ -1,0 +1,48 @@
+[project]
+name = "laica"
+version = "0.1.0"
+description = "Lesmo's AI Car customizations"
+requires-python = ">= 3.11, < 3.13"
+license = {text = "MIT License"}
+authors = [
+  {name = "Lesmo", email = "lesmo@example.com"}
+]
+
+dependencies = [
+  # Laica-specific ML/vision dependencies
+  # Add packages here as needed for laica-specific functionality
+
+  # Note: Main project already provides:
+  # - onnx >= 1.14.0 (in main dependencies)
+  # - psutil (in main dependencies)
+  # - tinygrad (for ONNX model loading - tinygrad.frontend.onnx.OnnxRunner)
+  # - opencv-python-headless (in dev optional dependencies - add opencv-python here if GUI needed)
+  # - matplotlib (in dev optional dependencies - add here if needed in production)
+]
+
+[project.optional-dependencies]
+dev = [
+  # Development-only dependencies (not needed on Comma 3X device)
+  "ultralytics",  # YOLO model training/export (used in scripts/train_yolo.py)
+  "kagglehub",    # Kaggle dataset downloads (used in scripts/train_yolo.py)
+  "PyYAML",       # YAML file handling (used in scripts/train_yolo.py)
+  "onnxruntime",  # Quantization and ONNX runtime for benchmarking/INT8 export
+  "onnxruntime-tools",  # Additional quantization tooling (dynamic/static PTQ)
+  "opencv-python-headless",  # Full OpenCV to satisfy cv2.imshow in Ultralytics utils
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["laica"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+indent-width = 2
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "PIE", "C4", "ISC", "A", "B"]
+ignore = ["E741", "E402", "C408", "ISC003"]

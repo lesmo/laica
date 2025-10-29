@@ -1,0 +1,33 @@
+import os
+
+# Try to reuse the top-level env if available; otherwise create one
+try:
+  Import('env')
+except Exception:
+  env = Environment(ENV=os.environ)
+
+repo_root = Dir('#').abspath
+venv_python = os.path.join(repo_root, '.venv', 'bin', 'python')
+
+# Paths
+models_dir = os.path.join(repo_root, 'laica', 'potholed', 'models')
+# Use the INT8 ONNX produced by training/quantization pipeline
+onnx_src = os.path.join(models_dir, 'best_int8.onnx')
+# Output .pkl name consistent with potholed daemon expectations
+pkl_out = os.path.join(models_dir, 'model.pkl')
+
+# Ensure output directory exists, then run the converter
+convert_cmd = [
+  f'mkdir -p "{models_dir}"',
+  f'"{venv_python}" "{os.path.join(repo_root, "laica", "potholed", "scripts", "convert_potholed.py")}" '
+  f'--onnx "{onnx_src}" --output "{pkl_out}"'
+]
+
+# Build rule
+target = env.Command(pkl_out, onnx_src, ' && '.join(convert_cmd))
+
+# Aliases
+env.Alias('pothole_model', target)
+Default(target)
+
+

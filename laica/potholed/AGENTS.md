@@ -1,0 +1,1 @@
+Never delete the ONNX models in models/ directory.

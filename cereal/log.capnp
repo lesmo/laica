@@ -1184,6 +1184,20 @@ struct ModelDataV2 {
   }
 }
 
+struct PotholeDetection @0xb93a0537a194a3c2 {
+  frameId @0 :UInt32;
+  modelExecutionTime @1 :Float32;
+  potholes @2 :List(Pothole);
+
+  struct Pothole {
+    x @0 :Float32;        # Normalized x coordinate (0-1)
+    y @1 :Float32;        # Normalized y coordinate (0-1)
+    width @2 :Float32;    # Normalized width (0-1)
+    height @3 :Float32;   # Normalized height (0-1)
+    confidence @4 :Float32;  # Detection confidence (0-1)
+  }
+}
+
 struct EncodeIndex {
   # picture from camera
   frameId @0 :UInt32;
@@ -2554,6 +2568,7 @@ struct Event {
     modelV2 @75 :ModelDataV2;
     drivingModelData @128 :DrivingModelData;
     driverStateV2 @92 :DriverStateV2;
+    potholeDetection @150 :PotholeDetection;
 
     # camera stuff, each camera state has a matching encode idx
     roadCameraState @2 :FrameData;

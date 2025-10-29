@@ -147,6 +147,14 @@ ModelsPanel::ModelsPanel(QWidget *parent) : QWidget(parent) {
   });
   delay_control->showDescription();
   list->addItem(delay_control);
+
+  // Pothole Detection toggle
+  pothole_detection_toggle = new ParamControlSP("PotholeDetectionEnabled", tr("Pothole Detection"),
+                            "Enable AI-powered pothole detection using the road camera. "
+                            "This feature helps identify potholes on the road surface for enhanced safety awareness.",
+                             "../assets/offroad/icon_shell.png");
+  pothole_detection_toggle->showDescription();
+  list->addItem(pothole_detection_toggle);
 }
 
 QProgressBar* ModelsPanel::createProgressBar(QWidget *parent) {
@@ -514,4 +522,5 @@ void ModelsPanel::showEvent(QShowEvent *event) {
   if (delay_control->isVisible()) {
     delay_control->showDescription();
   }
+  pothole_detection_toggle->showDescription();
 }

@@ -73,6 +73,8 @@ dependencies = [
 
   # ui
   "qrcode",
+  # laica
+  "laica",
 ]
 
 [project.optional-dependencies]
@@ -120,6 +122,7 @@ dev = [
   "types-requests",
   "types-tabulate",
   "raylib",
+  "laica[dev]",
 ]
 
 tools = [
@@ -268,3 +271,11 @@ lint.flake8-implicit-str-concat.allow-multiline = false
 
 [tool.ruff.format]
 quote-style = "preserve"
+
+[tool.uv.workspace]
+members = [
+    "laica",
+]
+
+[tool.uv.sources]
+laica = { workspace = true, editable = true }

@@ -1,0 +1,12 @@
+import os
+
+# Try to reuse the top-level env if available; otherwise create one
+try:
+  Import('env')
+except Exception:
+  env = Environment(ENV=os.environ)
+
+# Delegate to submodules in laica/
+SConscript(['laica/potholed/SConscript'], exports={'env': env})
+
+

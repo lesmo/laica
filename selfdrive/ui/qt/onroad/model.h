@@ -28,6 +28,7 @@ public:
 
   ModelRenderer() {}
   void setTransform(const Eigen::Matrix3f &transform) { car_space_transform = transform; }
+  const Eigen::Matrix3f &getTransform() const { return car_space_transform; }
   void draw(QPainter &painter, const QRect &surface_rect);
 
 protected:

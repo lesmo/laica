@@ -1,4 +1,3 @@
-
 #include "selfdrive/ui/qt/onroad/annotated_camera.h"
 
 #include <QPainter>
@@ -134,6 +133,9 @@ void AnnotatedCameraWidget::paintGL() {
   hud.updateState(*s);
   hud.draw(painter, rect());
 
+  // draw pothole detections (only when rendering the narrow road camera)
+  drawPotholeDetections(painter, *s);
+
   double cur_draw_t = millis_since_boot();
   double dt = cur_draw_t - prev_draw_t;
   double fps = fps_filter.update(1. / dt * 1000);
@@ -147,6 +149,83 @@ void AnnotatedCameraWidget::paintGL() {
   auto m = msg.initEvent().initUiDebug();
   m.setDrawTimeMillis(cur_draw_t - start_draw_t);
   pm->send("uiDebug", msg);
+}
+
+void AnnotatedCameraWidget::drawPotholeDetections(QPainter &p, const UIState &s) {
+  // Only render on narrow road camera to avoid mismatched intrinsics with wide cam
+  if (getStreamType() != VISION_STREAM_ROAD) return;
+
+  SubMaster &sm = *(s.sm);
+  if (!sm.alive("potholeDetection")) return;
+
+  const auto det = sm["potholeDetection"].getPotholeDetection();
+  const auto potholes = det.getPotholes();
+  if (potholes.size() == 0) return;
+
+  // Recompute the same video transform used for the textured camera so 2D image pixels map to widget pixels
+  const bool wide_cam = false;
+  const auto &intrinsic_matrix = wide_cam ? ECAM_INTRINSIC_MATRIX : FCAM_INTRINSIC_MATRIX;
+  const auto &calibration = wide_cam ? s.scene.view_from_wide_calib : s.scene.view_from_calib;
+  const auto calib_transform = intrinsic_matrix * calibration;
+
+  const float zoom = wide_cam ? 2.0f : 1.1f;
+  Eigen::Vector3f inf(1000.f, 0.f, 0.f);
+  auto Kep = calib_transform * inf;
+
+  const int w = width();
+  const int h = height();
+  const float center_x = intrinsic_matrix(0, 2);
+  const float center_y = intrinsic_matrix(1, 2);
+
+  const float max_x_offset = center_x * zoom - w / 2.f - 5.f;
+  const float max_y_offset = center_y * zoom - h / 2.f - 5.f;
+  const float x_offset = std::clamp<float>((Kep.x() / Kep.z() - center_x) * zoom, -max_x_offset, max_x_offset);
+  const float y_offset = std::clamp<float>((Kep.y() / Kep.z() - center_y) * zoom, -max_y_offset, max_y_offset);
+
+  // Map image pixel coords (u,v) to widget pixel coords
+  auto map_image_to_widget = [&](float u, float v) -> QPointF {
+    const float X = zoom * u + (w / 2.f - x_offset) - (center_x * zoom);
+    const float Y = zoom * v + (h / 2.f - y_offset) - (center_y * zoom);
+    return QPointF(X, Y);
+  };
+
+  // Intrinsic principal point gives us image dimensions (assuming center is image center)
+  const float img_w = center_x * 2.f;
+  const float img_h = center_y * 2.f;
+
+  QPen pen(QColor(255, 0, 0, 230));
+  pen.setWidth(3);
+  p.setPen(pen);
+  p.setBrush(Qt::NoBrush);
+
+  QFont font = p.font();
+  font.setPointSizeF(std::max(10.0, h * 0.02));
+  p.setFont(font);
+
+  for (int i = 0; i < potholes.size(); ++i) {
+    const auto ph = potholes[i];
+    // Normalized center-format -> image pixel coordinates
+    const float cx_img = ph.getX() * img_w;
+    const float cy_img = ph.getY() * img_h;
+    const float w_img = ph.getWidth() * img_w;
+    const float h_img = ph.getHeight() * img_h;
+
+    // Convert to widget coords using same transform as video
+    const QPointF center_px = map_image_to_widget(cx_img, cy_img);
+    const float w_px = w_img * zoom;
+    const float h_px = h_img * zoom;
+
+    const QRectF rect(center_px.x() - w_px * 0.5f,
+                      center_px.y() - h_px * 0.5f,
+                      w_px, h_px);
+
+    p.drawRect(rect);
+
+    // Confidence label
+    const float conf = ph.getConfidence();
+    const QString label = QString::number(conf * 100.f, 'f', 1) + "%";
+    p.drawText(rect.translated(0, -4), label);
+  }
 }
 
 void AnnotatedCameraWidget::showEvent(QShowEvent *event) {

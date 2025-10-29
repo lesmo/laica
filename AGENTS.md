@@ -72,3 +72,7 @@ To override C/C++ functions from the original codebase while keeping laica-speci
    ```
 
 **How it works**: Static libraries combine object files, and the linker prefers (1) strong symbols over weak symbols, and (2) earlier symbols in link order. By placing laica files first with strong symbols and marking the base version weak, the linker selects the laica implementation.
+
+## Route Replay
+
+To avoid issues with missing or unprocessable messages, generate `replay` commands with only the `--allow` flag set to `--allow=accelerometer,accelerometer2,alertDebug,bookmarkButton,cameraOdometry,can,carControl,carOutput,carParams,carState,clocks,controlsState,customReservedRawData2,deviceState,driverAssistance,driverCameraState,driverEncodeData,driverEncodeIdx,driverMonitoringState,driverStateV2,drivingModelData,errorLogMessage,gnssMeasurements,gpsLocation,gpsLocationExternal,gpsNMEA,gyroscope,gyroscope2,lightSensor,liveCalibration,liveLocationKalman,liveParameters,livePose,liveTorqueParameters,liveTracks,livestreamDriverEncodeData,livestreamDriverEncodeIdx,livestreamRoadEncodeData,livestreamRoadEncodeIdx,livestreamWideRoadEncodeData,livestreamWideRoadEncodeIdx,logMessage,longitudinalPlan,magnetometer,managerState,modelV2,navInstruction,navRoute,navThumbnail,onroadEvents,pandaStates,peripheralState,procLog,qRoadEncodeData,qRoadEncodeIdx,qcomGnss,radarState,roadCameraState,roadEncodeData,roadEncodeIdx,selfdriveState,sendcan,thumbnail,touch,ubloxGnss,ubloxRaw,wideRoadCameraState,wideRoadEncodeData,wideRoadEncodeIdx`

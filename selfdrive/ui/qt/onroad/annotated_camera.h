@@ -36,6 +36,7 @@ private:
 
   int skip_frame_count = 0;
   bool wide_cam_requested = false;
+  void drawPotholeDetections(QPainter &p, const UIState &s);
 
 protected:
   void paintGL() override;

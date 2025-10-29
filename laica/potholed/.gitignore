@@ -1,0 +1,6 @@
+# yolo training
+data/
+runs/
+models/*.pkl
+
+yolo*.pt

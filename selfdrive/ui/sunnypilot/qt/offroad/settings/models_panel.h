@@ -85,4 +85,5 @@ private:
   ButtonControlSP *refreshAvailableModelsBtn;
   ParamControlSP *lane_turn_desire_toggle;
   OptionControlSP *lane_turn_value_control;
+  ParamControlSP *pothole_detection_toggle;
 };
