@@ -505,8 +505,6 @@ class ModelState:
 
 
 def main():
-    config_realtime_process(7, 5)
-
     # Check if we're on TICI (Comma 3X) which has OpenCL support
     from openpilot.system.hardware import TICI
     if TICI:
