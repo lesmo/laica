@@ -25,6 +25,11 @@ if GetOption('extras'):
 # Cython bindings
 params_python = envCython.Program('params_pyx.so', 'params_pyx.pyx', LIBS=envCython['LIBS'] + [_common, 'zmq', 'json11'])
 
+# Ensure laica/common/params_keys.h is tracked as a dependency
+# This file is included by common/params_keys.h and params_pyx.so
+env.Depends(_common, '#laica/common/params_keys.h')
+env.Depends(params_python, '#laica/common/params_keys.h')
+
 SConscript([
   'transformations/SConscript',
 ])
