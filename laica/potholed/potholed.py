@@ -21,8 +21,7 @@ from cereal.messaging import PubMaster
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
-from openpilot.selfdrive.modeld.models.commonmodel_pyx import CLContext, DrivingModelFrame
-from openpilot.common.transformations.model import medmodel_frame_from_calib_frame
+from openpilot.selfdrive.modeld.models.commonmodel_pyx import CLContext
 
 # Model configuration - matches compiled model
 MODEL_WIDTH, MODEL_HEIGHT = 256, 256  # Matches the compiled model input size (trained at 256x256)
@@ -43,13 +42,9 @@ PROCESS_NAME = "selfdrive.potholed.potholed"
 MODEL_PKL_PATH = Path(__file__).parent / 'models/best.pkl'
 
 class ModelState:
-    def __init__(self, cl_ctx):
-        self.cl_ctx = cl_ctx
-        # Only create DrivingModelFrame if we have a valid CL context
-        if cl_ctx is not None:
-            self.frame = DrivingModelFrame(cl_ctx, 1)
-        else:
-            self.frame = None
+    def __init__(self, cl_ctx=None):
+        # Note: cl_ctx is kept for compatibility but not used (we do CPU YUV→RGB at full resolution)
+        # This avoids the projection transform from DrivingModelFrame that the model wasn't trained on
 
         # Load model
         model_path = MODEL_PKL_PATH
@@ -104,82 +99,58 @@ class ModelState:
         self._crop_params = None
 
     def preprocess_image(self, buf: VisionBuf) -> np.ndarray:
-        """Preprocess camera image for YOLO input - uses OpenCL-accelerated YUV→RGB when available"""
-        # Use OpenCL-accelerated YUV→RGB conversion if available (TICI with CL context)
-        if self.frame is not None and self.cl_ctx is not None:
-            # Use DrivingModelFrame for OpenCL YUV→RGB conversion (outputs 512x256 RGB uint8)
-            # This is much faster than CPU conversion
-            projection = medmodel_frame_from_calib_frame.flatten().astype(np.float32)
-            img_cl = self.frame.prepare(buf, projection)
-            # Get RGB data from OpenCL buffer (512x256x3 = 393216 bytes)
-            rgb_data = self.frame.buffer_from_cl(img_cl)
-            # Reshape to RGB image (512x256x3)
-            rgb_img = rgb_data.reshape((256, 512, 3))
-        else:
-            # Fallback: CPU YUV→RGB conversion
-            # Convert VisionBuf to numpy array
-            img_data = np.frombuffer(buf.data, dtype=np.uint8)
+        """Preprocess camera image for YOLO input - converts YUV to RGB at full resolution, then crops and resizes"""
+        # Convert YUV420 to RGB at full camera resolution (1928x1208)
+        # This avoids the projection transform from DrivingModelFrame that the model wasn't trained on
+        img_data = np.frombuffer(buf.data, dtype=np.uint8)
 
-            # Extract Y, U, V planes using the correct method from openpilot
-            y = np.array(img_data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
-            u = np.array(img_data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
-            v = np.array(img_data[buf.uv_offset+1::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
+        # Extract Y, U, V planes using the correct method from openpilot
+        y = np.array(img_data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
+        u = np.array(img_data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
+        v = np.array(img_data[buf.uv_offset+1::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
 
-            # Use the same YUV to RGB conversion as openpilot
-            ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
-            vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+        # Use the same YUV to RGB conversion as openpilot
+        ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+        vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
 
-            yuv = np.dstack((y, ul, vl)).astype(np.int16)
-            yuv[:, :, 1:] -= 128
+        yuv = np.dstack((y, ul, vl)).astype(np.int16)
+        yuv[:, :, 1:] -= 128
 
-            m = np.array([
-                [1.00000,  1.00000, 1.00000],
-                [0.00000, -0.39465, 2.03211],
-                [1.13983, -0.58060, 0.00000],
-            ])
-            rgb_img = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
+        m = np.array([
+            [1.00000,  1.00000, 1.00000],
+            [0.00000, -0.39465, 2.03211],
+            [1.13983, -0.58060, 0.00000],
+        ])
+        rgb_img = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
 
-        # Crop to middle portion of image to focus on road area
+        # Crop to middle portion of image to focus on road area (at full resolution)
         if TOP_HALF_FILTER_ENABLED:
             height, width = rgb_img.shape[:2]
 
-            # For DrivingModelFrame output (256x512), we want to produce 256x256
-            # Use full height and center-crop width to match model input exactly
-            target_size = min(height, width)  # Typically 256 from DrivingModelFrame
+            # Crop vertically: from CROP_START_PERCENT to CROP_END_PERCENT from top
+            start_y = int(height * CROP_START_PERCENT)
+            end_y = int(height * CROP_END_PERCENT)
+            cropped_height = end_y - start_y
 
-            # If we can produce the exact target size, do that
-            if height == target_size and width >= target_size:
-                # Use full height, center-crop width (e.g., 256x512 -> 256x256)
-                start_y = 0
-                end_y = height
-                start_x = (width - target_size) // 2
-                end_x = start_x + target_size
-                cropped_height = end_y - start_y
-            elif width == target_size and height >= target_size:
-                # Use full width, center-crop height (e.g., 512x256 -> 256x256)
+            # Calculate target width for square aspect ratio (1:1)
+            target_width = cropped_height  # Square aspect ratio
+
+            # Center the horizontal crop
+            if target_width <= width:
+                # We can fit the full target width, center it
+                start_x = (width - target_width) // 2
+                end_x = start_x + target_width
+            else:
+                # Target width is larger than original, use full width
                 start_x = 0
                 end_x = width
-                start_y = (height - target_size) // 2
-                end_y = start_y + target_size
-                cropped_height = end_y - start_y
-            else:
-                # Fallback to percentage-based cropping for other resolutions
-                start_y = int(height * CROP_START_PERCENT)
-                end_y = int(height * CROP_END_PERCENT)
-                cropped_height = end_y - start_y
-                target_width = cropped_height  # Square aspect ratio
-
-                if target_width <= width:
-                    start_x = (width - target_width) // 2
-                    end_x = start_x + target_width
-                else:
-                    start_x = 0
-                    end_x = width
-                    target_height = width
-                    center_y = (start_y + end_y) // 2
-                    start_y = center_y - target_height // 2
-                    end_y = start_y + target_height
-                    cropped_height = target_height
+                # Recalculate height to maintain square aspect ratio
+                target_height = width  # Square aspect ratio
+                # Adjust vertical crop to maintain square aspect ratio
+                center_y = (start_y + end_y) // 2
+                start_y = center_y - target_height // 2
+                end_y = start_y + target_height
+                cropped_height = target_height
 
             img_cropped = rgb_img[start_y:end_y, start_x:end_x]
 
