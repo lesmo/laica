@@ -12,9 +12,9 @@ venv_python = os.path.join(repo_root, '.venv', 'bin', 'python')
 # Paths
 models_dir = os.path.join(repo_root, 'laica', 'potholed', 'models')
 # Use the INT8 ONNX produced by training/quantization pipeline
-onnx_src = os.path.join(models_dir, 'best_int8.onnx')
+onnx_src = os.path.join(models_dir, 'best.onnx')
 # Output .pkl name consistent with potholed daemon expectations
-pkl_out = os.path.join(models_dir, 'model.pkl')
+pkl_out = os.path.join(models_dir, 'best.pkl')
 
 # Ensure output directory exists, then run the converter
 convert_cmd = [

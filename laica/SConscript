@@ -7,6 +7,6 @@ except Exception:
   env = Environment(ENV=os.environ)
 
 # Delegate to submodules in laica/
-SConscript(['laica/potholed/SConscript'], exports={'env': env})
+SConscript(['potholed/SConscript'], exports={'env': env})
 
 
