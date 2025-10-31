@@ -61,7 +61,18 @@ class ModelState:
             self.model_run = model_data
             self.metadata = {'model_type': 'tinygrad_jit'}
 
+        # Detect expected device from compiled model (JIT models are device-specific)
+        self.expected_device = 'NPY'  # Default fallback
+        try:
+            if hasattr(self.model_run, 'captured') and hasattr(self.model_run.captured, 'expected_st_vars_dtype_device'):
+                # Get device from first input (all inputs should use same device)
+                if len(self.model_run.captured.expected_st_vars_dtype_device) > 0:
+                    self.expected_device = self.model_run.captured.expected_st_vars_dtype_device[0][3]  # device is 4th element
+        except (AttributeError, IndexError):
+            pass  # Fall back to NPY
+
         cloudlog.info(f"Pothole detection model loaded: {self.metadata['model_type']}")
+        cloudlog.info(f"Model compiled for device: {self.expected_device}")
         max_area_pct = f"{MAX_DETECTION_AREA*100:.0f}%"
         cloudlog.info(f"Input cropping enabled: {TOP_HALF_FILTER_ENABLED} (center region: 30%-80% height, square aspect ratio, max area: {max_area_pct})")
 
@@ -443,18 +454,10 @@ class ModelState:
             img_input = self.preprocess_image(buf)
 
             # Convert to tinygrad tensor
-            # Note: Since preprocess_image already converts to numpy array,
-            # we use the preprocessed data directly. On TICI with QCOM,
-            # TinyGrad will use OpenCL internally for operations.
-            if TICI and not os.environ.get('USBGPU'):
-                # Use GPU device on TICI - TinyGrad will use OpenCL/QCOM internally
-                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='GPU')
-            elif os.environ.get('USBGPU'):
-                # Use CUDA if USBGPU is set
-                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='CUDA')
-            else:
-                # Use CPU/NPY for desktop
-                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='NPY')
+            # Note: JIT-compiled models are device-specific. Use the device the model was compiled for.
+            # If model was compiled on desktop (NPY), it must run on NPY.
+            # If model was compiled on C3X (GPU/QCOM), it will use GPU/QCOM.
+            img_tensor = Tensor(img_input, dtype=dtypes.float32, device=self.expected_device)
 
             # Run model inference
             model_output = self.model_run(images=img_tensor)
