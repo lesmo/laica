@@ -79,16 +79,8 @@ class ModelState:
 
                     cloudlog.debug(f"Raw detected device from model: {detected_device} (type: {type(detected_device)})")
 
-                    # Device handling: QCOM and GPU are related but TinyGrad may use different names
-                    # When DEV=QCOM, Device.DEFAULT is 'QCOM', but Tensor creation may need 'GPU'
-                    # Try to use the detected device first, but map QCOM->GPU if needed
-                    if detected_device == 'QCOM':
-                        # QCOM backend typically uses 'GPU' as device name for Tensor creation
-                        self.expected_device = 'GPU'
-                    elif detected_device == 'GPU':
-                        self.expected_device = 'GPU'
-                    else:
-                        self.expected_device = detected_device if detected_device else 'NPY'
+                    # Use the detected device directly (e.g., 'QCOM' or 'GPU') to match JIT capture
+                    self.expected_device = detected_device if detected_device else 'NPY'
         except (AttributeError, IndexError, TypeError) as e:
             cloudlog.debug(f"Could not detect device from model: {e}, will use NPY fallback")
 
