@@ -20,10 +20,8 @@ from cereal import messaging
 from cereal.messaging import PubMaster
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from openpilot.common.swaglog import cloudlog
-from openpilot.common.realtime import config_realtime_process
 from openpilot.common.params import Params
 from openpilot.selfdrive.modeld.models.commonmodel_pyx import CLContext, DrivingModelFrame
-from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from_opencl_address
 
 # Model configuration - matches compiled model
 MODEL_WIDTH, MODEL_HEIGHT = 320, 320  # Matches the compiled model input size
@@ -48,8 +46,8 @@ class ModelState:
         else:
             self.frame = None
 
-        # Load model - try CUDA version first if USBGPU is set
-        model_path = MODEL_PKL_PATH_CUDA if os.environ.get('USBGPU') and MODEL_PKL_PATH_CUDA.exists() else MODEL_PKL_PATH
+        # Load model
+        model_path = MODEL_PKL_PATH
         with open(model_path, "rb") as f:
             model_data = pickle.load(f)
 
@@ -441,27 +439,22 @@ class ModelState:
         t1 = time.perf_counter()
 
         try:
-            # Preprocess image
+            # Preprocess image (converts YUV to RGB and returns numpy array)
             img_input = self.preprocess_image(buf)
 
             # Convert to tinygrad tensor
-            # Note: The model was compiled for CPU (NPY), so we need to use the same device
-            # to avoid JIT compilation mismatches
-            if TICI and not os.environ.get('USBGPU') and self.cl_ctx is not None:
-                # Use OpenCL for Comma 3X
-                img_tensor = qcom_tensor_from_opencl_address(
-                    buf.mem_address,
-                    (1, 3, MODEL_HEIGHT, MODEL_WIDTH),
-                    dtype=dtypes.uint8
-                )
+            # Note: Since preprocess_image already converts to numpy array,
+            # we use the preprocessed data directly. On TICI with QCOM,
+            # TinyGrad will use OpenCL internally for operations.
+            if TICI and not os.environ.get('USBGPU'):
+                # Use GPU device on TICI - TinyGrad will use OpenCL/QCOM internally
+                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='GPU')
+            elif os.environ.get('USBGPU'):
+                # Use CUDA if USBGPU is set
+                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='CUDA')
             else:
-                # Use appropriate device based on model type
-                if os.environ.get('USBGPU') and MODEL_PKL_PATH_CUDA.exists():
-                    # Use CUDA if USBGPU is set and CUDA model exists
-                    img_tensor = Tensor(img_input, dtype=dtypes.float32, device='CUDA')
-                else:
-                    # Use CPU for desktop (model was compiled for NPY/CPU)
-                    img_tensor = Tensor(img_input, dtype=dtypes.float32, device='NPY')
+                # Use CPU/NPY for desktop
+                img_tensor = Tensor(img_input, dtype=dtypes.float32, device='NPY')
 
             # Run model inference
             model_output = self.model_run(images=img_tensor)
