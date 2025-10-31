@@ -7,7 +7,6 @@ except Exception:
   env = Environment(ENV=os.environ)
 
 repo_root = Dir('#').abspath
-venv_python = os.path.join(repo_root, '.venv', 'bin', 'python')
 
 # Paths
 models_dir = os.path.join(repo_root, 'laica', 'potholed', 'models')
@@ -19,7 +18,7 @@ pkl_out = os.path.join(models_dir, 'best.pkl')
 # Ensure output directory exists, then run the converter
 convert_cmd = [
   f'mkdir -p "{models_dir}"',
-  f'"{venv_python}" "{os.path.join(repo_root, "laica", "potholed", "scripts", "convert_potholed.py")}" '
+  f'"{os.path.join(repo_root, "laica", "potholed", "scripts", "convert_potholed.py")}" '
   f'--onnx "{onnx_src}" --output "{pkl_out}"'
 ]
 
