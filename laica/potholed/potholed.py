@@ -37,8 +37,7 @@ MAX_DETECTION_AREA = 0.1  # Maximum area a detection can cover
 DEBUG_ENABLED = os.environ.get('DEBUG', '').lower() in ('1', 'true', 'yes')
 
 PROCESS_NAME = "selfdrive.potholed.potholed"
-MODEL_PKL_PATH = Path(__file__).parent / 'models/pothole_detection_tinygrad.pkl'
-MODEL_PKL_PATH_CUDA = Path(__file__).parent / 'models/pothole_detection_tinygrad_cuda.pkl'
+MODEL_PKL_PATH = Path(__file__).parent / 'models/best.pkl'
 
 class ModelState:
     def __init__(self, cl_ctx):
