@@ -25,7 +25,7 @@ from openpilot.selfdrive.modeld.models.commonmodel_pyx import CLContext, Driving
 from openpilot.common.transformations.model import medmodel_frame_from_calib_frame
 
 # Model configuration - matches compiled model
-MODEL_WIDTH, MODEL_HEIGHT = 320, 320  # Matches the compiled model input size
+MODEL_WIDTH, MODEL_HEIGHT = 256, 256  # Matches the compiled model input size (trained at 256x256)
 CONFIDENCE_THRESHOLD = 0.4
 NMS_THRESHOLD = 0.5
 MAX_DETECTIONS = 10
@@ -143,30 +143,41 @@ class ModelState:
         if TOP_HALF_FILTER_ENABLED:
             height, width = rgb_img.shape[:2]
 
-            # Crop vertically: from CROP_START_PERCENT to CROP_END_PERCENT from top
-            start_y = int(height * CROP_START_PERCENT)
-            end_y = int(height * CROP_END_PERCENT)
-            cropped_height = end_y - start_y
+            # For DrivingModelFrame output (256x512), we want to produce 256x256
+            # Use full height and center-crop width to match model input exactly
+            target_size = min(height, width)  # Typically 256 from DrivingModelFrame
 
-            # Calculate target width for square aspect ratio (1:1)
-            target_width = cropped_height  # Square aspect ratio
-
-            # Center the horizontal crop
-            if target_width <= width:
-                # We can fit the full target width, center it
-                start_x = (width - target_width) // 2
-                end_x = start_x + target_width
-            else:
-                # Target width is larger than original, use full width
+            # If we can produce the exact target size, do that
+            if height == target_size and width >= target_size:
+                # Use full height, center-crop width (e.g., 256x512 -> 256x256)
+                start_y = 0
+                end_y = height
+                start_x = (width - target_size) // 2
+                end_x = start_x + target_size
+            elif width == target_size and height >= target_size:
+                # Use full width, center-crop height (e.g., 512x256 -> 256x256)
                 start_x = 0
                 end_x = width
-                # Recalculate height to maintain square aspect ratio
-                target_height = width  # Square aspect ratio
-                # Adjust vertical crop to maintain square aspect ratio
-                center_y = (start_y + end_y) // 2
-                start_y = center_y - target_height // 2
-                end_y = start_y + target_height
-                cropped_height = target_height
+                start_y = (height - target_size) // 2
+                end_y = start_y + target_size
+            else:
+                # Fallback to percentage-based cropping for other resolutions
+                start_y = int(height * CROP_START_PERCENT)
+                end_y = int(height * CROP_END_PERCENT)
+                cropped_height = end_y - start_y
+                target_width = cropped_height  # Square aspect ratio
+
+                if target_width <= width:
+                    start_x = (width - target_width) // 2
+                    end_x = start_x + target_width
+                else:
+                    start_x = 0
+                    end_x = width
+                    target_height = width
+                    center_y = (start_y + end_y) // 2
+                    start_y = center_y - target_height // 2
+                    end_y = start_y + target_height
+                    cropped_height = target_height
 
             img_cropped = rgb_img[start_y:end_y, start_x:end_x]
 

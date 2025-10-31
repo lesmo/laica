@@ -289,16 +289,13 @@ def train_yolo11n(data_yaml_path: Path):
     print("=" * 80)
     print("\nTwo-stage training strategy:")
     print("  Stage 1: Train at 640px for rich feature learning")
-    print("  Stage 2: Fine-tune at 320px for deployment optimization")
+    print("  Stage 2: Fine-tune at 256px for deployment optimization")
     print("=" * 80)
 
     # Check for existing checkpoints to resume training
     stage1_dir = Path('runs/potholed/stage1_640px')
-    stage2_dir = Path('runs/potholed/stage2_320px')
     stage1_last = stage1_dir / 'weights' / 'last.pt'
     stage1_best = stage1_dir / 'weights' / 'best.pt'
-    stage2_last = stage2_dir / 'weights' / 'last.pt'
-    stage2_best = stage2_dir / 'weights' / 'best.pt'
 
     # =========================================================================
     # STAGE 1: High-Resolution Feature Learning (640px)
@@ -405,13 +402,17 @@ def train_yolo11n(data_yaml_path: Path):
                 print(f"  mAP@50-95: {metrics['metrics/mAP50-95(B)']:.4f}")
 
     # =========================================================================
-    # STAGE 2: Fine-tuning at Deployment Resolution (320px)
+    # STAGE 2: Fine-tuning at Deployment Resolution (256px)
     # =========================================================================
     print("\n" + "=" * 80)
-    print("STAGE 2: Fine-tuning at 320px for deployment...")
+    print("STAGE 2: Fine-tuning at 256px for deployment...")
     print("=" * 80)
 
     # Check if Stage 2 can be resumed or is already complete
+    stage2_dir = Path('runs/potholed/stage2_256px')
+    stage2_last = stage2_dir / 'weights' / 'last.pt'
+    stage2_best = stage2_dir / 'weights' / 'best.pt'
+
     if stage2_best.exists():
         print(f"\n✅ Stage 2 already completed! Found best model: {stage2_best}")
         print("  Training is complete!")
@@ -434,7 +435,7 @@ def train_yolo11n(data_yaml_path: Path):
         print("\nStage 2 configuration:")
         print("  Model: YOLO11n (from Stage 1)")
         print("  Epochs: 100")
-        print("  Image size: 320x320 (deployment resolution)")
+        print("  Image size: 256x256 (deployment resolution, matches cropped input)")
         print("  Batch size: 32")
         print("  Optimizer: SGD")
         print("  Learning rate: 0.001 (10x lower for fine-tuning)")
@@ -457,7 +458,7 @@ def train_yolo11n(data_yaml_path: Path):
         results_stage2 = model.train(
             data=str(data_yaml_path),
             epochs=100,
-            imgsz=320,
+            imgsz=256,
             batch=32,
             optimizer='SGD',
             lr0=0.001,
@@ -481,7 +482,7 @@ def train_yolo11n(data_yaml_path: Path):
             save=True,
             save_period=-1,  # Only save best and last
             project='runs/potholed',
-            name='stage2_320px',
+            name='stage2_256px',
             exist_ok=True,
             verbose=True,
         )
@@ -494,13 +495,13 @@ def train_yolo11n(data_yaml_path: Path):
     print("=" * 80)
 
     print(f"\n✅ Stage 1 model (640px): {best_stage1_path}")
-    print(f"✅ Stage 2 model (320px): {best_model_path}")
+    print(f"✅ Stage 2 model (256px): {best_model_path}")
     print(f"✅ Final model for deployment: {best_model_path}")
 
     # Print final metrics
     if not skip_stage2 and hasattr(results_stage2, 'results_dict'):
         metrics = results_stage2.results_dict
-        print("\nFinal metrics (Stage 2 at 320px):")
+        print("\nFinal metrics (Stage 2 at 256px):")
         if 'metrics/precision(B)' in metrics:
             print(f"  Precision: {metrics['metrics/precision(B)']:.4f}")
         if 'metrics/recall(B)' in metrics:
@@ -521,7 +522,7 @@ def train_yolo11n(data_yaml_path: Path):
 
     print("\nTwo-stage training benefits (with improvements):")
     print("  ✅ Rich feature learning from 640px training (200 epochs)")
-    print("  ✅ Optimized for 320px deployment (inference speed)")
+    print("  ✅ Optimized for 256px deployment (matches cropped input, faster inference)")
     print("  ✅ Better small object detection")
     print("  ✅ Stronger augmentation increases generalization")
     print("  ✅ Expected improvements: +10-15% mAP vs previous training")
@@ -534,7 +535,7 @@ def train_yolo11n(data_yaml_path: Path):
     return best_model_path
 
 
-def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 320, half: bool = True) -> Path:
+def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 256, half: bool = True) -> Path:
     """
     Export trained model to ONNX (FP16 by default) and return the path.
 
@@ -620,7 +621,7 @@ def main():
     print("\n" + "=" * 80)
     print("Exporting Stage 2 best model to FP16 ONNX...")
     print("=" * 80)
-    onnx_fp16_path = export_onnx(best_model_path, imgsz=320, half=True)
+    onnx_fp16_path = export_onnx(best_model_path, imgsz=256, half=True)
     print(f"\nFP16 ONNX model: {onnx_fp16_path}")
 
     # Copy the ONNX artifact into laica/potholed/models directory (do not delete existing models)
