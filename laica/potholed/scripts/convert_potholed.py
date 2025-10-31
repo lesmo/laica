@@ -40,8 +40,22 @@ def main() -> int:
     # Configure tinygrad backend
     import os
     import pickle
+
+    # Auto-detect TICI (Comma 3X) for QCOM/OpenCL
+    try:
+      from openpilot.system.hardware import TICI
+      is_tici = TICI
+    except (ImportError, AttributeError):
+      is_tici = False
+
     if 'DEV' not in os.environ:
-      os.environ['DEV'] = 'CUDA' if args.cuda else 'LLVM'
+      if args.cuda:
+        os.environ['DEV'] = 'CUDA'
+      elif is_tici:
+        os.environ['DEV'] = 'QCOM'  # OpenCL for C3X
+        print("✓ Detected TICI (C3X), using QCOM/OpenCL backend")
+      else:
+        os.environ['DEV'] = 'LLVM'  # CPU fallback
     if 'FLOAT16' not in os.environ:
       os.environ['FLOAT16'] = '1'
     if 'IMAGE' not in os.environ:
@@ -59,10 +73,12 @@ def main() -> int:
     # Load ONNX
     run_onnx = OnnxRunner(str(onnx_path))
 
-    # Derive inputs
+    # Derive inputs - preserve original ONNX input types for better FP16 optimization
+    # With FLOAT16=1, TinyGrad can handle float16 inputs natively, reducing memory bandwidth
     input_shapes = {name: spec.shape for name, spec in run_onnx.graph_inputs.items()}
     input_types = {name: spec.dtype for name, spec in run_onnx.graph_inputs.items()}
-    input_types = {k: (dtypes.float32 if v is dtypes.float16 else v) for k, v in input_types.items()}
+    # Note: Removed float16->float32 cast to enable full FP16 optimization
+    # If ONNX has float16 inputs, they will be preserved
 
     Tensor.manual_seed(100)
     new_inputs = {k: Tensor.randn(*shp, dtype=input_types[k]).mul(8).realize() for k, shp in sorted(input_shapes.items())}

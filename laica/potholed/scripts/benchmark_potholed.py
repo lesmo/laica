@@ -28,6 +28,28 @@ if str(TG_PATH) not in sys.path:
 # Set CPU-only for realistic Comma 3X simulation
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
+# Auto-detect TICI (Comma 3X) for device selection
+try:
+    from openpilot.system.hardware import TICI
+    IS_TICI = TICI
+except (ImportError, AttributeError):
+    IS_TICI = False
+
+# Set TinyGrad device based on platform
+if IS_TICI:
+    os.environ['DEV'] = 'QCOM'  # OpenCL for C3X
+    DEFAULT_DEVICE = 'GPU'  # TinyGrad will use OpenCL/GPU
+    print("✓ Detected TICI (C3X), using QCOM/OpenCL backend")
+else:
+    os.environ['DEV'] = 'LLVM'
+    DEFAULT_DEVICE = 'NPY'  # CPU fallback
+    print("✓ Using CPU (NPY) backend")
+
+# Enable FP16 optimization for better performance on GPU
+if 'FLOAT16' not in os.environ:
+    os.environ['FLOAT16'] = '1'
+    print("✓ Enabled FP16 optimization")
+
 
 def set_cpu_affinity(num_cores: int = 4):
     """Limit to specific CPU cores to simulate Comma 3X constraints"""
@@ -81,8 +103,11 @@ def generate_test_images(count: int = 100, size: Tuple[int, int] = (1928, 1208))
 
 
 def benchmark_model(model_path: Path, images: List[np.ndarray],
-                   target_size: int = 320, warmup_runs: int = 10) -> Dict:
+                   target_size: int = 320, warmup_runs: int = 10, device: str = None) -> Dict:
     """Benchmark TinyGrad .pkl model inference speed"""
+
+    if device is None:
+        device = DEFAULT_DEVICE
 
     import pickle
     from tinygrad.tensor import Tensor
@@ -102,24 +127,52 @@ def benchmark_model(model_path: Path, images: List[np.ndarray],
         model_run = model_data
         metadata = {'model_type': 'tinygrad_jit'}
 
+    # Detect input dtype from compiled model (supports FP16 from ONNX export)
+    input_dtype = dtypes.float32  # Default fallback
+    try:
+        # Try to get input dtype from model's captured function
+        if hasattr(model_run, 'captured') and hasattr(model_run.captured, 'expected_st_vars_dtype_device'):
+            # Find 'images' input in the expected inputs
+            if hasattr(model_run.captured, 'expected_names'):
+                for idx, name in enumerate(model_run.captured.expected_names):
+                    if 'images' in name or 'img' in name or name == 'images':
+                        if idx < len(model_run.captured.expected_st_vars_dtype_device):
+                            input_dtype = model_run.captured.expected_st_vars_dtype_device[idx][2]  # dtype
+                            break
+    except (AttributeError, IndexError):
+        pass  # Fall back to float32
+
     print(f"Model type: {metadata.get('model_type', 'unknown')}")
+    print(f"Device: {device}")
+    print(f"Input dtype: {input_dtype}")
     print(f"Target inference size: {target_size}x{target_size}")
     print(f"Test images: {len(images)}")
     print(f"Warmup runs: {warmup_runs}")
 
-    # Helper: preprocess np.ndarray RGB image -> float32 CHW batch of size 1
+    # Helper: preprocess np.ndarray RGB image -> CHW batch of size 1
+    # Use numpy dtype that matches the model's expected input dtype
+    numpy_dtype = np.float32 if input_dtype == dtypes.float32 else np.float16
+
     def preprocess(img: np.ndarray) -> np.ndarray:
         import cv2
         img_resized = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
-        img_normalized = img_resized.astype(np.float32) / 255.0
+        img_normalized = img_resized.astype(numpy_dtype) / 255.0
         img_chw = np.transpose(img_normalized, (2, 0, 1))
         return np.expand_dims(img_chw, axis=0)
 
+    # Check if FP16 is enabled for internal operations
+    use_fp16_internals = os.environ.get('FLOAT16') == '1'
+    dtype_str = f"{input_dtype} inputs"
+    if use_fp16_internals and input_dtype == dtypes.float32:
+        dtype_str += " + FP16 internals"
+    elif input_dtype == dtypes.float16:
+        dtype_str += " (full FP16)"
+
     # Warmup
-    print(f"\nWarming up model ({warmup_runs} runs)...")
+    print(f"\nWarming up model ({warmup_runs} runs) on {device} ({dtype_str})...")
     for i in range(warmup_runs):
         np_in = preprocess(images[i % len(images)])
-        inp = Tensor(np_in, dtype=dtypes.float32, device='NPY')
+        inp = Tensor(np_in, dtype=input_dtype, device=device)
         _ = model_run(images=inp)
     print("✓ Warmup complete")
 
@@ -134,7 +187,7 @@ def benchmark_model(model_path: Path, images: List[np.ndarray],
         # Inference
         t_inference_start = time.perf_counter()
         np_in = preprocess(img)
-        inp = Tensor(np_in, dtype=dtypes.float32, device='NPY')
+        inp = Tensor(np_in, dtype=input_dtype, device=device)
         _ = model_run(images=inp)
         t_inference_end = time.perf_counter()
 
@@ -246,7 +299,7 @@ def print_benchmark_results(stats: Dict, target_fps: int = 20):
     print(f"\n{'='*80}\n")
 
 
-def compare_models(model_paths: List[Path], images: List[np.ndarray], target_size: int = 320):
+def compare_models(model_paths: List[Path], images: List[np.ndarray], target_size: int = 320, device: str = None):
     """Compare multiple models"""
     results = []
 
@@ -255,7 +308,7 @@ def compare_models(model_paths: List[Path], images: List[np.ndarray], target_siz
             print(f"⚠️  Model not found: {model_path}")
             continue
 
-        stats = benchmark_model(model_path, images, target_size)
+        stats = benchmark_model(model_path, images, target_size, device=device)
         results.append(stats)
 
     # Print comparison
@@ -297,6 +350,8 @@ def main():
                        help='Simulate background CPU load (0-100%, default: 0)')
     parser.add_argument('--compare', nargs='+',
                        help='Compare multiple models')
+    parser.add_argument('--device', type=str, default=None,
+                       help=f'Override device (default: auto-detect, current: {DEFAULT_DEVICE})')
 
     args = parser.parse_args()
 
@@ -326,11 +381,16 @@ def main():
         # Generate test images
         images = generate_test_images(args.images, size=(1928, 1208))
 
+        # Override device if specified
+        device = args.device if args.device else DEFAULT_DEVICE
+        if args.device:
+            print(f"\n⚠️  Overriding device to: {device}")
+
         # Benchmark
         if args.compare:
             # Compare multiple models
             model_paths = [Path(p) for p in args.compare]
-            results = compare_models(model_paths, images, args.size)
+            results = compare_models(model_paths, images, args.size, device=device)
 
             # Print individual results
             for stats in results:
@@ -342,7 +402,7 @@ def main():
                 print(f"ERROR: Model not found: {model_path}")
                 sys.exit(1)
 
-            stats = benchmark_model(model_path, images, args.size, args.warmup)
+            stats = benchmark_model(model_path, images, args.size, args.warmup, device=device)
             print_benchmark_results(stats, args.target_fps)
 
     finally:

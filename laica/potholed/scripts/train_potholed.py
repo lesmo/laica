@@ -534,12 +534,19 @@ def train_yolo11n(data_yaml_path: Path):
     return best_model_path
 
 
-def export_fp32_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 320) -> Path:
+def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 320, half: bool = True) -> Path:
     """
-    Export trained model to FP32 ONNX and return the path.
+    Export trained model to ONNX (FP16 by default) and return the path.
+
+    Args:
+        model_path: Path to the trained .pt model
+        output_dir: Output directory for ONNX file (default: runs/potholed/stage3_export)
+        imgsz: Image size for export (default: 320)
+        half: If True, export FP16 ONNX; if False, export FP32 ONNX (default: True)
     """
+    precision = "FP16" if half else "FP32"
     print("\n" + "=" * 80)
-    print("Exporting model to FP32 ONNX")
+    print(f"Exporting model to {precision} ONNX")
     print("=" * 80)
     print(f"\nSource model: {model_path}")
 
@@ -555,26 +562,27 @@ def export_fp32_onnx(model_path: Path, output_dir: Path | None = None, imgsz: in
         simplify=True,
         dynamic=False,
         opset=12,
+        half=half,  # FP16 export
         verbose=False,
         project=str(output_dir),
-        name='onnx_fp32'
+        name=f'onnx_{precision.lower()}'
     )
 
     if isinstance(export_result, (str, Path)):
-        onnx_fp32_path = Path(export_result)
+        onnx_path = Path(export_result)
     else:
-        onnx_fp32_path = output_dir / 'onnx_fp32' / 'model.onnx'
+        onnx_path = output_dir / f'onnx_{precision.lower()}' / 'model.onnx'
 
-    if not onnx_fp32_path.exists():
-        alt_path = output_dir / 'onnx_fp32.onnx'
+    if not onnx_path.exists():
+        alt_path = output_dir / f'onnx_{precision.lower()}.onnx'
         if alt_path.exists():
-            onnx_fp32_path = alt_path
+            onnx_path = alt_path
         else:
-            print(f"ERROR: ONNX export not found at {onnx_fp32_path}")
+            print(f"ERROR: ONNX export not found at {onnx_path}")
             sys.exit(1)
 
-    print(f"✅ ONNX (FP32) saved: {onnx_fp32_path}")
-    return onnx_fp32_path
+    print(f"✅ ONNX ({precision}) saved: {onnx_path}")
+    return onnx_path
 
 def main():
     """Main training pipeline"""
@@ -608,19 +616,19 @@ def main():
     print("=" * 80)
     print(f"\nBest model: {best_model_path}")
 
-    # Export Stage 2 best model to FP32 ONNX for TinyGrad pipeline
+    # Export Stage 2 best model to FP16 ONNX for TinyGrad pipeline (FP16 for better performance)
     print("\n" + "=" * 80)
-    print("Exporting Stage 2 best model to FP32 ONNX...")
+    print("Exporting Stage 2 best model to FP16 ONNX...")
     print("=" * 80)
-    onnx_fp32_path = export_fp32_onnx(best_model_path, imgsz=320)
-    print(f"\nFP32 ONNX model: {onnx_fp32_path}")
+    onnx_fp16_path = export_onnx(best_model_path, imgsz=320, half=True)
+    print(f"\nFP16 ONNX model: {onnx_fp16_path}")
 
     # Copy the ONNX artifact into laica/potholed/models directory (do not delete existing models)
     models_dir = script_dir.parent / 'models'
     models_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = models_dir / Path(onnx_fp32_path).name
+    dest_path = models_dir / Path(onnx_fp16_path).name
     try:
-        shutil.copy2(onnx_fp32_path, dest_path)
+        shutil.copy2(onnx_fp16_path, dest_path)
         print(f"\n✅ Copied model to: {dest_path}")
     except Exception as e:
         print(f"\n⚠️ Failed to copy model to {dest_path}: {e}")
