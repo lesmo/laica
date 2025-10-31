@@ -154,12 +154,14 @@ class ModelState:
                 end_y = height
                 start_x = (width - target_size) // 2
                 end_x = start_x + target_size
+                cropped_height = end_y - start_y
             elif width == target_size and height >= target_size:
                 # Use full width, center-crop height (e.g., 512x256 -> 256x256)
                 start_x = 0
                 end_x = width
                 start_y = (height - target_size) // 2
                 end_y = start_y + target_size
+                cropped_height = end_y - start_y
             else:
                 # Fallback to percentage-based cropping for other resolutions
                 start_y = int(height * CROP_START_PERCENT)
