@@ -42,11 +42,21 @@ def main() -> int:
     import pickle
 
     # Auto-detect TICI (Comma 3X) for QCOM/OpenCL
+    # Try multiple methods for robust detection
+    is_tici = False
     try:
       from openpilot.system.hardware import TICI
       is_tici = TICI
     except (ImportError, AttributeError):
-      is_tici = False
+      pass
+
+    # Fallback: check for /TICI file directly (more reliable)
+    if not is_tici:
+      is_tici = os.path.isfile('/TICI')
+
+    # Also check environment variable as override
+    if 'DEV' in os.environ and os.environ['DEV'] == 'QCOM':
+      is_tici = True  # If DEV=QCOM is set, assume TICI
 
     if 'DEV' not in os.environ:
       if args.cuda:
@@ -65,7 +75,7 @@ def main() -> int:
     if 'JIT_BATCH_SIZE' not in os.environ:
       os.environ['JIT_BATCH_SIZE'] = '0'
 
-    from tinygrad import Tensor, TinyJit, Context, GlobalCounters, Device, dtypes
+    from tinygrad import Tensor, TinyJit, Context, GlobalCounters, Device
     from tinygrad.helpers import DEBUG
     from tinygrad.engine.realize import CompiledRunner
     from tinygrad.frontend.onnx import OnnxRunner

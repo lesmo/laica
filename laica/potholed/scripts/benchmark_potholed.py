@@ -29,19 +29,31 @@ if str(TG_PATH) not in sys.path:
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 # Auto-detect TICI (Comma 3X) for device selection
+# Try multiple methods for robust detection
+IS_TICI = False
 try:
     from openpilot.system.hardware import TICI
     IS_TICI = TICI
 except (ImportError, AttributeError):
-    IS_TICI = False
+    pass
+
+# Fallback: check for /TICI file directly (more reliable)
+if not IS_TICI:
+    IS_TICI = os.path.isfile('/TICI')
+
+# Also check environment variable as override
+if 'DEV' in os.environ and os.environ['DEV'] == 'QCOM':
+    IS_TICI = True  # If DEV=QCOM is set, assume TICI
 
 # Set TinyGrad device based on platform
 if IS_TICI:
-    os.environ['DEV'] = 'QCOM'  # OpenCL for C3X
+    if 'DEV' not in os.environ:
+        os.environ['DEV'] = 'QCOM'  # OpenCL for C3X
     DEFAULT_DEVICE = 'GPU'  # TinyGrad will use OpenCL/GPU
     print("✓ Detected TICI (C3X), using QCOM/OpenCL backend")
 else:
-    os.environ['DEV'] = 'LLVM'
+    if 'DEV' not in os.environ:
+        os.environ['DEV'] = 'LLVM'
     DEFAULT_DEVICE = 'NPY'  # CPU fallback
     print("✓ Using CPU (NPY) backend")
 
