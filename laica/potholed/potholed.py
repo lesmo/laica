@@ -22,6 +22,7 @@ from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.modeld.models.commonmodel_pyx import CLContext, DrivingModelFrame
+from openpilot.common.transformations.model import medmodel_frame_from_calib_frame
 
 # Model configuration - matches compiled model
 MODEL_WIDTH, MODEL_HEIGHT = 320, 320  # Matches the compiled model input size
@@ -99,28 +100,40 @@ class ModelState:
         self._crop_params = None
 
     def preprocess_image(self, buf: VisionBuf) -> np.ndarray:
-        """Preprocess camera image for YOLO input - optimized for YUV420 (Comma 3X)"""
-        # Convert VisionBuf to numpy array
-        img_data = np.frombuffer(buf.data, dtype=np.uint8)
+        """Preprocess camera image for YOLO input - uses OpenCL-accelerated YUV→RGB when available"""
+        # Use OpenCL-accelerated YUV→RGB conversion if available (TICI with CL context)
+        if self.frame is not None and self.cl_ctx is not None:
+            # Use DrivingModelFrame for OpenCL YUV→RGB conversion (outputs 512x256 RGB uint8)
+            # This is much faster than CPU conversion
+            projection = medmodel_frame_from_calib_frame.flatten().astype(np.float32)
+            img_cl = self.frame.prepare(buf, projection)
+            # Get RGB data from OpenCL buffer (512x256x3 = 393216 bytes)
+            rgb_data = self.frame.buffer_from_cl(img_cl)
+            # Reshape to RGB image (512x256x3)
+            rgb_img = rgb_data.reshape((256, 512, 3))
+        else:
+            # Fallback: CPU YUV→RGB conversion
+            # Convert VisionBuf to numpy array
+            img_data = np.frombuffer(buf.data, dtype=np.uint8)
 
-        # Extract Y, U, V planes using the correct method from openpilot
-        y = np.array(img_data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
-        u = np.array(img_data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
-        v = np.array(img_data[buf.uv_offset+1::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
+            # Extract Y, U, V planes using the correct method from openpilot
+            y = np.array(img_data[:buf.uv_offset], dtype=np.uint8).reshape((-1, buf.stride))[:buf.height, :buf.width]
+            u = np.array(img_data[buf.uv_offset::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
+            v = np.array(img_data[buf.uv_offset+1::2], dtype=np.uint8).reshape((-1, buf.stride//2))[:buf.height//2, :buf.width//2]
 
-        # Use the same YUV to RGB conversion as openpilot
-        ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
-        vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+            # Use the same YUV to RGB conversion as openpilot
+            ul = np.repeat(np.repeat(u, 2).reshape(u.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
+            vl = np.repeat(np.repeat(v, 2).reshape(v.shape[0], y.shape[1]), 2, axis=0).reshape(y.shape)
 
-        yuv = np.dstack((y, ul, vl)).astype(np.int16)
-        yuv[:, :, 1:] -= 128
+            yuv = np.dstack((y, ul, vl)).astype(np.int16)
+            yuv[:, :, 1:] -= 128
 
-        m = np.array([
-            [1.00000,  1.00000, 1.00000],
-            [0.00000, -0.39465, 2.03211],
-            [1.13983, -0.58060, 0.00000],
-        ])
-        rgb_img = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
+            m = np.array([
+                [1.00000,  1.00000, 1.00000],
+                [0.00000, -0.39465, 2.03211],
+                [1.13983, -0.58060, 0.00000],
+            ])
+            rgb_img = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
 
         # Crop to middle portion of image to focus on road area
         if TOP_HALF_FILTER_ENABLED:
