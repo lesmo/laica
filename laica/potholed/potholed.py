@@ -29,6 +29,10 @@ MODEL_WIDTH, MODEL_HEIGHT = 320, 320  # Matches the compiled model input size
 CONFIDENCE_THRESHOLD = 0.4
 NMS_THRESHOLD = 0.5
 MAX_DETECTIONS = 10
+
+# Frame skipping for performance (process every Nth frame to achieve ~10 FPS)
+# Camera runs at 20 FPS, so FRAME_SKIP=2 gives us 10 FPS
+FRAME_SKIP = 2  # Process every 2nd frame
 TOP_HALF_FILTER_ENABLED = True  # Crop input image to center region (30%-80% height) with square aspect ratio and filter large detections
 CROP_START_PERCENT = 0.2  # Start cropping at 30% from top
 CROP_END_PERCENT = 0.9    # End cropping at 80% from top (leaving 20% at bottom)
@@ -592,7 +596,18 @@ def main():
 
         frame_count += 1
 
-        # Run detection
+        # Frame skipping: process every Nth frame to reduce CPU/GPU load
+        # This reduces processing from 20 FPS to ~10 FPS (every 2nd frame)
+        if frame_count % FRAME_SKIP != 0:
+            # Send empty message to keep service alive but skip actual detection
+            msg = messaging.new_message('potholeDetection')
+            msg.potholeDetection.frameId = vipc_client.frame_id
+            msg.potholeDetection.modelExecutionTime = 0.0
+            msg.potholeDetection.init('potholes', 0)
+            pm.send('potholeDetection', msg)
+            continue
+
+        # Run detection (only on frames that pass the skip check)
         detections, execution_time = model.run(buf)
 
         # Debug: Log every 100 frames to show we're processing
