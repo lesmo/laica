@@ -91,10 +91,13 @@ def main() -> int:
     # If ONNX has float16 inputs, they will be preserved
 
     Tensor.manual_seed(100)
-    new_inputs = {k: Tensor.randn(*shp, dtype=input_types[k]).mul(8).realize() for k, shp in sorted(input_shapes.items())}
+    # Create inputs on the target device (Device.DEFAULT) so JIT captures the correct device
+    target_device = Device.DEFAULT
+    print(f"✓ Compiling model for device: {target_device}")
+    new_inputs = {k: Tensor.randn(*shp, dtype=input_types[k], device=target_device).mul(8).realize() for k, shp in sorted(input_shapes.items())}
     new_inputs_numpy = {k: v.numpy() for k, v in new_inputs.items()}
 
-    # Create JIT
+    # Create JIT - inputs should already be on Device.DEFAULT, but ensure they are
     run_onnx_jit = TinyJit(
       lambda **kwargs: next(iter(run_onnx({k: v.to(Device.DEFAULT) for k, v in kwargs.items()}).values())).cast('float32'),
       prune=True,
@@ -106,7 +109,7 @@ def main() -> int:
         GlobalCounters.reset()
         inputs = {
           **{k: v.clone() for k, v in new_inputs.items() if 'img' in k},
-          **{k: Tensor(v, device='NPY').realize() for k, v in new_inputs_numpy.items() if 'img' not in k},
+          **{k: Tensor(v, device=target_device).realize() for k, v in new_inputs_numpy.items() if 'img' not in k},
         }
         with Context(DEBUG=max(DEBUG.value, 2 if i == 2 else 1)):
           _ = run_onnx_jit(**inputs).numpy()
