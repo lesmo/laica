@@ -67,9 +67,30 @@ class ModelState:
             if hasattr(self.model_run, 'captured') and hasattr(self.model_run.captured, 'expected_st_vars_dtype_device'):
                 # Get device from first input (all inputs should use same device)
                 if len(self.model_run.captured.expected_st_vars_dtype_device) > 0:
-                    self.expected_device = self.model_run.captured.expected_st_vars_dtype_device[0][3]  # device is 4th element
-        except (AttributeError, IndexError):
-            pass  # Fall back to NPY
+                    device_info = self.model_run.captured.expected_st_vars_dtype_device[0]
+                    cloudlog.debug(f"Device info structure: {device_info}, length: {len(device_info) if hasattr(device_info, '__len__') else 'N/A'}")
+                    detected_device = device_info[3] if len(device_info) > 3 else None
+
+                    # Handle Device object vs string
+                    if hasattr(detected_device, 'device'):
+                        detected_device = detected_device.device
+                    elif hasattr(detected_device, '__str__'):
+                        detected_device = str(detected_device)
+
+                    cloudlog.debug(f"Raw detected device from model: {detected_device} (type: {type(detected_device)})")
+
+                    # Device handling: QCOM and GPU are related but TinyGrad may use different names
+                    # When DEV=QCOM, Device.DEFAULT is 'QCOM', but Tensor creation may need 'GPU'
+                    # Try to use the detected device first, but map QCOM->GPU if needed
+                    if detected_device == 'QCOM':
+                        # QCOM backend typically uses 'GPU' as device name for Tensor creation
+                        self.expected_device = 'GPU'
+                    elif detected_device == 'GPU':
+                        self.expected_device = 'GPU'
+                    else:
+                        self.expected_device = detected_device if detected_device else 'NPY'
+        except (AttributeError, IndexError, TypeError) as e:
+            cloudlog.debug(f"Could not detect device from model: {e}, will use NPY fallback")
 
         cloudlog.info(f"Pothole detection model loaded: {self.metadata['model_type']}")
         cloudlog.info(f"Model compiled for device: {self.expected_device}")
