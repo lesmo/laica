@@ -600,12 +600,6 @@ def main():
         # Frame skipping: process every Nth frame to reduce CPU/GPU load
         # This reduces processing from 20 FPS to ~10 FPS (every 2nd frame)
         if frame_count % FRAME_SKIP != 0:
-            # Send empty message to keep service alive but skip actual detection
-            msg = messaging.new_message('potholeDetection')
-            msg.potholeDetection.frameId = vipc_client.frame_id
-            msg.potholeDetection.modelExecutionTime = 0.0
-            msg.potholeDetection.init('potholes', 0)
-            pm.send('potholeDetection', msg)
             continue
 
         # Run detection (only on frames that pass the skip check)
