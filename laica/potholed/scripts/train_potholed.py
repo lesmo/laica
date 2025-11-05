@@ -332,25 +332,43 @@ def train_yolo(train_name: str, data_yaml_path: Path, yolo_model: str = 'yolo11s
         # Set default training parameters
         default_train_kwargs = dict(
             data=str(data_yaml_path),
-            epochs=1,
-            imgsz=416,
-            batch=-1,
-            lr0=0.01,
+
+            epochs=100,
+            imgsz=640,
+            batch=-1, # auto-batching
+            lr0=0.01, # For SGD
             momentum=0.937,
-            weight_decay=0.0005,
-            patience=30,
-            hsv_h=0.020,
-            hsv_s=0.8,
-            hsv_v=0.5,
+            weight_decay=5e-4,
+            warmup_epochs=3.0,
+            patience=20,
+            optimizer='SGD',
+
+            # Learning rate scheduler
+            cos_lr=False,  # Linear decay is default
+            lrf=0.01, # Final LR fraction (1% of lr0)
+
+            # Augmentations
+            hsv_h=0.015,
+            hsv_s=0.7,
+            hsv_v=0.4,
+            translate=0.1,
+            scale=0.5,
             fliplr=0.5,
-            degrees=10.0,
-            shear=2.0,
-            scale=0.7,
-            mosaic=0.5,
-            mixup=0.15,
+            flipud=0.0,
+            degrees=0.0,
+            shear=0.0,
+            perspective=0.0,
+            mosaic=1.0,
+            mixup=0.0,
             copy_paste=0.0,
+
+            # YOLOv11-specific
+            amp=True, # Mixed precision (FP16)
+            close_mosaic=10, # Disable mosaic in last 10 epochs
+            pretrained=True, # Load pretrained YOLOv11s backbone
+
+            # Logging and saving
             resume=resume_training,
-            amp=True,
             save=True,
             save_period=-1,
             project='runs',
