@@ -332,6 +332,7 @@ def train_yolo(train_name: str, data_yaml_path: Path, yolo_model: str = 'yolo11s
         # Set default training parameters
         default_train_kwargs = dict(
             data=str(data_yaml_path),
+            device=[-1,-1],
 
             epochs=100,
             imgsz=640,
