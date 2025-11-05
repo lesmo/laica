@@ -8,34 +8,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / 'tinygrad_repo'))
 
-DEFAULT_MODELS_DIR = REPO_ROOT / 'laica' / 'potholed' / 'models'
-DEFAULT_ONNX = DEFAULT_MODELS_DIR / 'best.onnx'
-DEFAULT_PKL = DEFAULT_MODELS_DIR / 'best.pkl'
+MODELS_DIR = REPO_ROOT / 'laica' / 'potholed' / 'models'
 
 
-def main() -> int:
-  parser = argparse.ArgumentParser(description='Convert pothole ONNX model to Tinygrad PKL')
-  parser.add_argument('--onnx', type=str, default=str(DEFAULT_ONNX), help='Path to ONNX model')
-  parser.add_argument('--output', type=str, help='Path to output PKL (auto by backend if omitted)')
-  parser.add_argument('--cuda', action='store_true', help='Use CUDA converter')
-  parser.add_argument('--no-validate', action='store_true', help='Skip validation step')
-
-  args = parser.parse_args()
-
-  onnx_path = Path(args.onnx)
-
-  if not onnx_path.exists():
-    print(f"Error: ONNX file not found: {onnx_path}")
-    if DEFAULT_MODELS_DIR.exists():
-      print("Available ONNX files:")
-      for p in sorted(DEFAULT_MODELS_DIR.glob('*.onnx')):
-        print(f"  {p}")
-    return 1
-
-  # Select default output if not provided
-  output_path = Path(args.output) if args.output else DEFAULT_PKL
-  output_path.parent.mkdir(parents=True, exist_ok=True)
-
+def convert_onnx_to_pkl(onnx_path: Path, output_path: Path, use_cuda: bool = False, no_validate: bool = False) -> bool:
+  """Convert a single ONNX file to PKL format."""
   try:
     # Configure tinygrad backend
     import os
@@ -59,11 +36,11 @@ def main() -> int:
       is_tici = True  # If DEV=QCOM is set, assume TICI
 
     if 'DEV' not in os.environ:
-      if args.cuda:
+      if use_cuda:
         os.environ['DEV'] = 'CUDA'
       elif is_tici:
         os.environ['DEV'] = 'QCOM'  # OpenCL for C3X
-        print("✓ Detected TICI (C3X), using QCOM/OpenCL backend")
+        print(f"✓ Detected TICI (C3X), using QCOM/OpenCL backend for {onnx_path.name}")
       else:
         os.environ['DEV'] = 'LLVM'  # CPU fallback
     if 'FLOAT16' not in os.environ:
@@ -93,7 +70,7 @@ def main() -> int:
     Tensor.manual_seed(100)
     # Create inputs on the target device (Device.DEFAULT) so JIT captures the correct device
     target_device = Device.DEFAULT
-    print(f"✓ Compiling model for device: {target_device}")
+    print(f"✓ Compiling {onnx_path.name} for device: {target_device}")
     new_inputs = {k: Tensor.randn(*shp, dtype=input_types[k], device=target_device).mul(8).realize() for k, shp in sorted(input_shapes.items())}
     new_inputs_numpy = {k: v.numpy() for k, v in new_inputs.items()}
 
@@ -104,7 +81,7 @@ def main() -> int:
     )
 
     # Optional validation
-    if not args.no_validate:
+    if not no_validate:
       for i in range(3):
         GlobalCounters.reset()
         inputs = {
@@ -126,16 +103,61 @@ def main() -> int:
           gated_read_image_count += ps.count('?read_image')
 
     # Write PKL
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'wb') as f:
       pickle.dump(run_onnx_jit, f)
+
+    print(f"✓ Success: wrote {output_path}")
+    return True
   except Exception as e:
-    print(f"Conversion failed: {e}")
+    print(f"✗ Conversion failed for {onnx_path.name}: {e}")
     import traceback
     traceback.print_exc()
+    return False
+
+
+def main() -> int:
+  parser = argparse.ArgumentParser(description='Convert all pothole ONNX models to Tinygrad PKL')
+  parser.add_argument('--cuda', action='store_true', help='Use CUDA converter')
+  parser.add_argument('--no-validate', action='store_true', help='Skip validation step')
+
+  args = parser.parse_args()
+
+  models_dir = MODELS_DIR
+
+  if not models_dir.exists():
+    print(f"Error: Models directory not found: {models_dir}")
     return 1
 
-  print(f"\nSuccess: wrote {output_path}")
-  return 0
+  # Find all ONNX files
+  onnx_files = sorted(models_dir.glob('*.onnx'))
+
+  if not onnx_files:
+    print(f"No ONNX files found in {models_dir}")
+    return 1
+
+  print(f"Found {len(onnx_files)} ONNX file(s) to convert:")
+  for onnx_file in onnx_files:
+    print(f"  - {onnx_file.name}")
+
+  print("\n" + "=" * 80)
+
+  success_count = 0
+  for onnx_path in onnx_files:
+    # Output PKL to same directory with .pkl extension
+    output_path = onnx_path.with_suffix('.pkl')
+
+    print(f"\nConverting: {onnx_path.name} -> {output_path.name}")
+    print("-" * 80)
+
+    if convert_onnx_to_pkl(onnx_path, output_path, args.cuda, args.no_validate):
+      success_count += 1
+
+  print("\n" + "=" * 80)
+  print(f"Conversion complete: {success_count}/{len(onnx_files)} successful")
+  print("=" * 80)
+
+  return 0 if success_count == len(onnx_files) else 1
 
 
 if __name__ == '__main__':
