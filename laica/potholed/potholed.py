@@ -33,9 +33,6 @@ MAX_DETECTIONS = 10
 # Frame skipping for performance (process every Nth frame to achieve ~10 FPS)
 # Camera runs at 20 FPS, so FRAME_SKIP=2 gives us 10 FPS
 FRAME_SKIP = 2  # Process every 2nd frame
-TOP_HALF_FILTER_ENABLED = True  # Crop input image to center region (30%-80% height) with square aspect ratio and filter large detections
-CROP_START_PERCENT = 0.2  # Start cropping at 30% from top
-CROP_END_PERCENT = 0.9    # End cropping at 80% from top (leaving 20% at bottom)
 MAX_DETECTION_AREA = 0.1  # Maximum area a detection can cover
 DEBUG_ENABLED = os.environ.get('DEBUG', '').lower() in ('1', 'true', 'yes')
 
@@ -43,9 +40,9 @@ PROCESS_NAME = "selfdrive.potholed.potholed"
 MODEL_PKL_PATH = Path(__file__).parent / 'models/best.pkl'
 
 class ModelState:
-    def __init__(self, cl_ctx=None):
+    def __init__(self, cl_ctx):
         self.cl_ctx = cl_ctx
-        # Create DrivingModelFrame for OpenCL-accelerated YUV→RGB conversion (much faster than CPU)
+        # Only create DrivingModelFrame if we have a valid CL context
         if cl_ctx is not None:
             self.frame = DrivingModelFrame(cl_ctx, 1)
         else:
@@ -92,7 +89,7 @@ class ModelState:
         cloudlog.info(f"Pothole detection model loaded: {self.metadata['model_type']}")
         cloudlog.info(f"Model compiled for device: {self.expected_device}")
         max_area_pct = f"{MAX_DETECTION_AREA*100:.0f}%"
-        cloudlog.info(f"Input cropping enabled: {TOP_HALF_FILTER_ENABLED} (center region: 30%-80% height, square aspect ratio, max area: {max_area_pct})")
+        cloudlog.info(f"Input cropping: center crop assuming 256 height (square aspect ratio, max area: {max_area_pct})")
 
         # Detection buffer for temporal smoothing
         self.detection_buffer = deque(maxlen=5)  # 0.25s at 20Hz
@@ -107,16 +104,31 @@ class ModelState:
         """Preprocess camera image for YOLO input - uses OpenCL-accelerated YUV→RGB when available"""
         # Use OpenCL-accelerated YUV→RGB conversion if available (TICI with CL context)
         if self.frame is not None and self.cl_ctx is not None:
-            # Use DrivingModelFrame for OpenCL YUV→RGB conversion (outputs 256x512 RGB uint8)
+            # Use DrivingModelFrame for OpenCL YUV→RGB conversion (outputs 512x256 RGB uint8)
             # This is much faster than CPU conversion
             projection = medmodel_frame_from_calib_frame.flatten().astype(np.float32)
             img_cl = self.frame.prepare(buf, projection)
-            # Get RGB data from OpenCL buffer (512x256x3 = 393216 bytes)
+            # Get RGB data from OpenCL buffer (contains 2 frames, we need the second one)
+            # buf_size = MODEL_FRAME_SIZE * 2 where MODEL_FRAME_SIZE = 512 * 256 * 3 / 2 (YUV420)
+            # But buffer_from_cl appears to return RGB data, so each frame is 256*512*3 = 393216 bytes
+            # Second frame (current) starts at offset 393216
+            # NOTE: Unlike modeld.py which uses qcom_tensor_from_opencl_address to avoid CPU copy,
+            # we still need buffer_from_cl here because we do CPU-side preprocessing (cropping/resizing).
+            # Future optimization: could use qcom_tensor_from_opencl_address and do cropping/resizing
+            # with TinyGrad operations on GPU to avoid the CPU-GPU copy.
             rgb_data = self.frame.buffer_from_cl(img_cl)
+            # Extract the second frame (current frame) - skip first frame
+            RGB_FRAME_SIZE = 256 * 512 * 3  # RGB: height * width * 3 = 393216 bytes per frame
+            if len(rgb_data) >= RGB_FRAME_SIZE * 2:
+                # Buffer contains 2 frames, extract the second one (current frame)
+                current_frame_data = rgb_data[RGB_FRAME_SIZE:]
+            else:
+                # Fallback: use entire buffer if it's only one frame
+                current_frame_data = rgb_data
             # Reshape to RGB image (256x512x3)
-            rgb_img = rgb_data.reshape((256, 512, 3))
+            rgb_img = current_frame_data[:RGB_FRAME_SIZE].reshape((256, 512, 3))
         else:
-            # Fallback: CPU YUV→RGB conversion at full resolution
+            # Fallback: CPU YUV→RGB conversion
             # Convert VisionBuf to numpy array
             img_data = np.frombuffer(buf.data, dtype=np.uint8)
 
@@ -139,63 +151,34 @@ class ModelState:
             ])
             rgb_img = np.dot(yuv, m).clip(0, 255).astype(np.uint8)
 
-        # Crop to middle portion of image to focus on road area
-        # Note: rgb_img is 256x512 when using OpenCL (DrivingModelFrame) or 1928x1208 when using CPU fallback
-        if TOP_HALF_FILTER_ENABLED:
-            height, width = rgb_img.shape[:2]
+        # Center crop from 256x512 to 256x256 (square aspect ratio)
+        # Input is always 256 height x 512 width (height x width in numpy)
+        height, width = 256, 512
+        target_size = MODEL_HEIGHT  # 256
 
-            # Crop vertically: from CROP_START_PERCENT to CROP_END_PERCENT from top
-            start_y = int(height * CROP_START_PERCENT)
-            end_y = int(height * CROP_END_PERCENT)
-            cropped_height = end_y - start_y
+        # Use full height (256), center-crop width (512 -> 256)
+        start_y = 0
+        end_y = height
+        start_x = (width - target_size) // 2  # (512 - 256) // 2 = 128
+        end_x = start_x + target_size  # 128 + 256 = 384
+        cropped_height = height
+        cropped_width = target_size
 
-            # Calculate target width for square aspect ratio (1:1)
-            target_width = cropped_height  # Square aspect ratio
+        img_cropped = rgb_img[start_y:end_y, start_x:end_x]
 
-            # Center the horizontal crop
-            if target_width <= width:
-                # We can fit the full target width, center it
-                start_x = (width - target_width) // 2
-                end_x = start_x + target_width
-            else:
-                # Target width is larger than original, use full width
-                start_x = 0
-                end_x = width
-                # Recalculate height to maintain square aspect ratio
-                target_height = width  # Square aspect ratio
-                # Adjust vertical crop to maintain square aspect ratio
-                center_y = (start_y + end_y) // 2
-                start_y = center_y - target_height // 2
-                end_y = start_y + target_height
-                cropped_height = target_height
+        # Store crop parameters for coordinate mapping
+        self._crop_params = {
+            'original_height': height,
+            'original_width': width,
+            'start_y': start_y,
+            'end_y': end_y,
+            'start_x': start_x,
+            'end_x': end_x,
+            'cropped_height': cropped_height,
+            'cropped_width': cropped_width
+        }
 
-            img_cropped = rgb_img[start_y:end_y, start_x:end_x]
-
-            # Store crop parameters for coordinate mapping
-            self._crop_params = {
-                'original_height': height,
-                'original_width': width,
-                'start_y': start_y,
-                'end_y': end_y,
-                'start_x': start_x,
-                'end_x': end_x,
-                'cropped_height': cropped_height,
-                'cropped_width': end_x - start_x
-            }
-
-            # Calculate actual crop percentages for logging
-            actual_left_pct = start_x / width
-            actual_right_pct = (width - end_x) / width
-            actual_top_pct = start_y / height
-            actual_bottom_pct = (height - end_y) / height
-
-            crop_range_v = f"{actual_top_pct*100:.0f}%-{(1-actual_bottom_pct)*100:.0f}%"
-            crop_range_h = f"{actual_left_pct*100:.0f}%-{(1-actual_right_pct)*100:.0f}%"
-            debug_msg = f"Cropped image from {height}x{width} to {img_cropped.shape[0]}x{img_cropped.shape[1]} " + \
-                        f"(v:{crop_range_v}, h:{crop_range_h}, square_aspect_ratio)"
-            cloudlog.debug(debug_msg)
-        else:
-            img_cropped = rgb_img
+        cloudlog.debug(f"Cropped image from {height}x{width} to {cropped_height}x{cropped_width} (center crop)")
 
         # Resize to model input size using OpenCV for better performance
         img_resized = cv2.resize(img_cropped, (MODEL_WIDTH, MODEL_HEIGHT), interpolation=cv2.INTER_LINEAR)
@@ -322,8 +305,8 @@ class ModelState:
                 cloudlog.debug(f"Normalizing: raw_x={raw_x:.1f}/{MODEL_WIDTH}={x_norm:.3f}")
 
             # Adjust coordinates to account for input cropping
-            if TOP_HALF_FILTER_ENABLED and self._crop_params is not None:
-                # Use the stored crop parameters from preprocessing
+            if self._crop_params is not None:
+                # Map from cropped region back to original image
                 orig_height = self._crop_params['original_height']
                 orig_width = self._crop_params['original_width']
                 start_y = self._crop_params['start_y']
@@ -337,14 +320,7 @@ class ModelState:
                 # Map X coordinates from the cropped region [0,1] back to the original image
                 x_norm = x_norm * (cropped_width / orig_width) + (start_x / orig_width)
 
-                cloudlog.debug(f"Adjusted coordinates for square cropping: x={x_norm:.3f}, y={y_norm:.3f}")
-            elif TOP_HALF_FILTER_ENABLED:
-                # Fallback to original logic if crop parameters not available
-                crop_height = CROP_END_PERCENT - CROP_START_PERCENT
-                y_norm = y_norm * crop_height + CROP_START_PERCENT
-                crop_width = crop_height  # Square aspect ratio
-                x_norm = x_norm * crop_width + (1 - crop_width) / 2
-                cloudlog.debug(f"Adjusted coordinates for square cropping (fallback): x={x_norm:.3f}, y={y_norm:.3f}")
+                cloudlog.debug(f"Adjusted coordinates for center cropping: x={x_norm:.3f}, y={y_norm:.3f}")
 
             conf = confidence[idx]
 
@@ -371,8 +347,8 @@ class ModelState:
                 w_pixel = int(w_norm * MODEL_WIDTH)
                 h_pixel = int(h_norm * MODEL_HEIGHT)
 
-                # Adjust coordinates for visualization if we cropped the input
-                if TOP_HALF_FILTER_ENABLED and self._crop_params is not None:
+                # Adjust coordinates for visualization (debug image is the cropped version)
+                if self._crop_params is not None:
                     # The debug image is the cropped version, so we need to adjust coordinates
                     # back to the cropped image coordinate system for visualization
                     orig_height = self._crop_params['original_height']
@@ -391,18 +367,6 @@ class ModelState:
                     h_pixel = int(h_norm / (cropped_height / orig_height) * MODEL_HEIGHT)
                     x_pixel = int(crop_x_norm * MODEL_WIDTH)
                     w_pixel = int(w_norm / (cropped_width / orig_width) * MODEL_WIDTH)
-                elif TOP_HALF_FILTER_ENABLED:
-                    # Fallback to original logic for square cropping
-                    crop_height = CROP_END_PERCENT - CROP_START_PERCENT
-                    crop_width = crop_height  # Square aspect ratio
-
-                    # Adjust Y coordinates
-                    y_pixel = int((y_norm - CROP_START_PERCENT) / crop_height * MODEL_HEIGHT)
-                    h_pixel = int(h_norm / crop_height * MODEL_HEIGHT)
-
-                    # Adjust X coordinates
-                    x_pixel = int((x_norm - (1 - crop_width) / 2) / crop_width * MODEL_WIDTH)
-                    w_pixel = int(w_norm / crop_width * MODEL_WIDTH)
 
                 # Draw bounding box
                 cv2.rectangle(debug_img,
@@ -600,6 +564,12 @@ def main():
         # Frame skipping: process every Nth frame to reduce CPU/GPU load
         # This reduces processing from 20 FPS to ~10 FPS (every 2nd frame)
         if frame_count % FRAME_SKIP != 0:
+            # Send empty message to keep service alive but skip actual detection
+            msg = messaging.new_message('potholeDetection')
+            msg.potholeDetection.frameId = vipc_client.frame_id
+            msg.potholeDetection.modelExecutionTime = 0.0
+            msg.potholeDetection.init('potholes', 0)
+            pm.send('potholeDetection', msg)
             continue
 
         # Run detection (only on frames that pass the skip check)
