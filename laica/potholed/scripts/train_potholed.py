@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import Dict, Any
 from ultralytics import YOLO
 
-SCRIPT_DIR = Path(__file__).parent
-MODELS_DIR = SCRIPT_DIR / "models"
-RUNS_DIR = SCRIPT_DIR / "runs"
+POTHOLED_DIR = Path(__file__).parent.parent
+MODELS_DIR = POTHOLED_DIR / "models"
+RUNS_DIR = POTHOLED_DIR / "runs"
 DATA_DIR = RUNS_DIR / "data"
 
 def download_dataset() -> Path:
@@ -349,17 +349,17 @@ def train_yolo(train_name: str, data_yaml_path: Path, yolo_model: str = 'yolo11s
 
             # Augmentations
             hsv_h=0.015,
-            hsv_s=0.7,
-            hsv_v=0.4,
+            hsv_s=0.5,
+            hsv_v=0.5,
             translate=0.1,
             scale=0.5,
             fliplr=0.5,
             flipud=0.0,
-            degrees=0.0,
-            shear=0.0,
+            degrees=5.0,
+            shear=2.0,
             perspective=0.0,
-            mosaic=1.0,
-            mixup=0.0,
+            mosaic=0.5,
+            mixup=0.005,
             copy_paste=0.0,
 
             # YOLOv11-specific
