@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """
-Minimal YOLO11n Pothole Detection Training Script
-Downloads MWPD dataset via KaggleHub and trains YOLO11n for pothole detection
+Minimal YOLO11s Pothole Detection Training Script
+Downloads MWPD dataset via KaggleHub and trains YOLO11s for pothole detection
 
-Two-Stage Training:
-  Stage 1: Train at 640px for rich feature learning
-  Stage 2: Fine-tune at 320px for deployment optimization
+Single-Stage Training:
+  Trains at 512x512 resolution (matches inference resolution and cropped input)
 
 Resume Training:
   The script automatically detects and resumes from checkpoints if training is interrupted.
-
-  - If Stage 1 is interrupted: Simply re-run the script. It will resume from the last checkpoint.
-  - If Stage 1 is complete: The script will skip Stage 1 and proceed to Stage 2.
-  - If Stage 2 is interrupted: Re-run the script to resume Stage 2 from the last checkpoint.
-  - If both stages are complete: The script will skip training and export the models.
+  Simply re-run the script to resume from the last checkpoint.
 
 Models are exported to:
-  - laica/potholed/models/model_fp32.onnx (FP32 ONNX model)
+  - laica/potholed/models/model_fp16.onnx (FP16 ONNX model)
 """
 import os
 import sys
@@ -24,11 +19,17 @@ import json
 import shutil
 import kagglehub
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Any
 from ultralytics import YOLO
+
+SCRIPT_DIR = Path(__file__).parent
+MODELS_DIR = SCRIPT_DIR / "models"
+RUNS_DIR = SCRIPT_DIR / "runs"
+DATA_DIR = RUNS_DIR / "data"
 
 def download_dataset() -> Path:
     """Download MWPD dataset using KaggleHub"""
+
     print("=" * 80)
     print("STEP 1: Downloading MWPD dataset from Kaggle...")
     print("=" * 80)
@@ -50,6 +51,7 @@ def download_dataset() -> Path:
 
 def find_dataset_structure(dataset_path: Path) -> Dict[str, Path]:
     """Find images and labels in the dataset - checks multiple levels deep"""
+
     print("\n" + "=" * 80)
     print("STEP 2: Analyzing dataset structure...")
     print("=" * 80)
@@ -144,6 +146,7 @@ def find_dataset_structure(dataset_path: Path) -> Dict[str, Path]:
 
 def convert_coco_to_yolo(coco_json_path: Path, images_dir: Path, output_dir: Path, class_name: str = 'pothole'):
     """Convert COCO format annotations to YOLO format (single class)"""
+
     print(f"\nConverting COCO annotations: {coco_json_path.name}")
 
     with open(coco_json_path, 'r') as f:
@@ -195,6 +198,7 @@ def convert_coco_to_yolo(coco_json_path: Path, images_dir: Path, output_dir: Pat
 
 def create_yolo_dataset(dataset_path: Path, structure: Dict, output_base: Path) -> Path:
     """Create YOLO-format dataset structure"""
+
     print("\n" + "=" * 80)
     print("STEP 3: Preparing YOLO dataset structure...")
     print("=" * 80)
@@ -282,226 +286,128 @@ def create_yolo_dataset(dataset_path: Path, structure: Dict, output_base: Path) 
     return data_yaml_path
 
 
-def train_yolo11n(data_yaml_path: Path):
-    """Train YOLO11n model with two-stage training approach"""
+def train_yolo(train_name: str, data_yaml_path: Path, yolo_model: str = 'yolo11s.pt', **train_kwargs: Any):
+    """
+    Train YOLO model with configurable parameters.
+
+    Args:
+        train_name: Name for the training run (used for output directory)
+        data_yaml_path: Path to the dataset YAML file
+        yolo_model: YOLO model to use (e.g., 'yolo11s.pt', 'yolo11n.pt', 'yolo11m.pt')
+        **train_kwargs: Additional parameters passed directly to model.train()
+    """
     print("\n" + "=" * 80)
-    print("STEP 4: Two-Stage Training YOLO11n model...")
+    print(f"STEP 4: Training YOLO model ({train_name})...")
     print("=" * 80)
-    print("\nTwo-stage training strategy:")
-    print("  Stage 1: Train at 640px for rich feature learning")
-    print("  Stage 2: Fine-tune at 256px for deployment optimization")
+    print("\nTraining strategy:")
+    print(f"  Model: {yolo_model}")
+    print(f"  Training name: {train_name}")
     print("=" * 80)
 
     # Check for existing checkpoints to resume training
-    stage1_dir = Path('runs/potholed/stage1_640px')
-    stage1_last = stage1_dir / 'weights' / 'last.pt'
-    stage1_best = stage1_dir / 'weights' / 'best.pt'
+    train_dir = Path(f'runs/{train_name}')
+    train_last = train_dir / 'weights' / 'last.pt'
+    train_best = train_dir / 'weights' / 'best.pt'
 
-    # =========================================================================
-    # STAGE 1: High-Resolution Feature Learning (640px)
-    # =========================================================================
-    print("\n" + "=" * 80)
-    print("STAGE 1: Training at 640px for feature learning...")
-    print("=" * 80)
-
-    # Check if Stage 1 can be resumed or is already complete
-    if stage1_best.exists():
-        print(f"\n✅ Stage 1 already completed! Found best model: {stage1_best}")
-        print("  Skipping Stage 1 training...")
-        best_stage1_path = stage1_best
-        skip_stage1 = True
-    elif stage1_last.exists():
-        print(f"\n⚠️ Found Stage 1 checkpoint: {stage1_last}")
-        print("  Resuming Stage 1 training from last checkpoint...")
-        model = YOLO(str(stage1_last))
-        skip_stage1 = False
-        resume_stage1 = True
+    # Check if training can be resumed or is already complete
+    if train_best.exists():
+        print(f"\n✅ Training already completed! Found best model: {train_best}")
+        print("  Training is complete!")
+        best_model_path = train_best
+        skip_training = True
+    elif train_last.exists():
+        print(f"\n⚠️ Found checkpoint: {train_last}")
+        print("  Resuming training from last checkpoint...")
+        model = YOLO(str(train_last))
+        skip_training = False
+        resume_training = True
     else:
-        print("\nLoading YOLO11n pretrained model...")
-        model = YOLO('yolo11n.pt')
-        skip_stage1 = False
-        resume_stage1 = False
+        print(f"\nLoading YOLO pretrained model: {yolo_model}")
+        model = YOLO(yolo_model)
+        skip_training = False
+        resume_training = False
 
-    if not skip_stage1:
-        print("\nStage 1 configuration:")
-        print("  Model: YOLO11n")
-        print("  Epochs: 100")
-        print("  Image size: 640x640 (high resolution)")
-        print("  Batch size: 16 (increased from 8)")
-        print("  Optimizer: SGD")
-        print("  Learning rate: 0.01")
-        print("  Momentum: 0.937")
-        print("  Weight decay: 0.0005")
-        print("  Data augmentation:")
-        print("    - Horizontal flip: 0.5")
-        print("    - Vertical flip: 0.5")
-        print("    - Rotation: ±10°")
-        print("    - Shear: ±2°")
-        print("    - HSV augmentation: h=0.020, s=0.8, v=0.5")
-        print("    - Scale: 0.7")
-        print("    - Mosaic: 1.0")
-        print("    - Mixup: 0.1")
-
-        if resume_stage1:
-            print("\n⚠️ RESUMING Stage 1 training from checkpoint...\n")
-        else:
-            print("\nStarting Stage 1 training...\n")
-
-        # Train Stage 1
-        results_stage1 = model.train(
+    results = None
+    if not skip_training:
+        # Set default training parameters
+        default_train_kwargs = dict(
             data=str(data_yaml_path),
-            epochs=200,
-            imgsz=640,
-            batch=16,
-            optimizer='SGD',
+            epochs=1,
+            imgsz=416,
+            batch=-1,
             lr0=0.01,
             momentum=0.937,
             weight_decay=0.0005,
-
-            # Data augmentation
+            patience=30,
             hsv_h=0.020,
             hsv_s=0.8,
             hsv_v=0.5,
             fliplr=0.5,
-            flipud=0.5,
             degrees=10.0,
             shear=2.0,
             scale=0.7,
-            mosaic=1.0,
-            mixup=0.1,
-
-            # Training settings
-            resume=resume_stage1,  # Resume from checkpoint if available
-            save=True,
-            save_period=-1,  # Only save best and last
-            project='runs/potholed',
-            name='stage1_640px',
-            exist_ok=True,
-            verbose=True,
-        )
-
-        # Get Stage 1 best model
-        best_stage1_path = Path(model.trainer.save_dir) / "weights" / "best.pt"
-
-        print("\n" + "=" * 80)
-        print("✅ Stage 1 Complete!")
-        print("=" * 80)
-        print(f"Best Stage 1 model: {best_stage1_path}")
-
-        # Print Stage 1 metrics
-        if hasattr(results_stage1, 'results_dict'):
-            metrics = results_stage1.results_dict
-            print("\nStage 1 metrics (at 640px):")
-            if 'metrics/precision(B)' in metrics:
-                print(f"  Precision: {metrics['metrics/precision(B)']:.4f}")
-            if 'metrics/recall(B)' in metrics:
-                print(f"  Recall: {metrics['metrics/recall(B)']:.4f}")
-            if 'metrics/mAP50(B)' in metrics:
-                print(f"  mAP@50: {metrics['metrics/mAP50(B)']:.4f}")
-            if 'metrics/mAP50-95(B)' in metrics:
-                print(f"  mAP@50-95: {metrics['metrics/mAP50-95(B)']:.4f}")
-
-    # =========================================================================
-    # STAGE 2: Fine-tuning at Deployment Resolution (256px)
-    # =========================================================================
-    print("\n" + "=" * 80)
-    print("STAGE 2: Fine-tuning at 256px for deployment...")
-    print("=" * 80)
-
-    # Check if Stage 2 can be resumed or is already complete
-    stage2_dir = Path('runs/potholed/stage2_256px')
-    stage2_last = stage2_dir / 'weights' / 'last.pt'
-    stage2_best = stage2_dir / 'weights' / 'best.pt'
-
-    if stage2_best.exists():
-        print(f"\n✅ Stage 2 already completed! Found best model: {stage2_best}")
-        print("  Training is complete!")
-        best_model_path = stage2_best
-        skip_stage2 = True
-    elif stage2_last.exists():
-        print(f"\n⚠️ Found Stage 2 checkpoint: {stage2_last}")
-        print("  Resuming Stage 2 training from last checkpoint...")
-        model = YOLO(str(stage2_last))
-        skip_stage2 = False
-        resume_stage2 = True
-    else:
-        # Load Stage 1 best weights
-        print(f"\nLoading Stage 1 best weights: {best_stage1_path}")
-        model = YOLO(str(best_stage1_path))
-        skip_stage2 = False
-        resume_stage2 = False
-
-    if not skip_stage2:
-        print("\nStage 2 configuration:")
-        print("  Model: YOLO11n (from Stage 1)")
-        print("  Epochs: 100")
-        print("  Image size: 256x256 (deployment resolution, matches cropped input)")
-        print("  Batch size: 32")
-        print("  Optimizer: SGD")
-        print("  Learning rate: 0.001 (10x lower for fine-tuning)")
-        print("  Momentum: 0.937")
-        print("  Weight decay: 0.0005")
-        print("  Data augmentation (moderate - balanced for fine-tuning):")
-        print("    - Horizontal flip: 0.5")
-        print("    - Vertical flip: 0.5")
-        print("    - Rotation: ±5°")
-        print("    - Shear: ±1.5°")
-        print("    - HSV augmentation: h=0.015, s=0.6, v=0.4")
-        print("    - Scale: 0.5")
-        print("    - Mosaic: 0.5")
-        if resume_stage2:
-            print("\n⚠️ RESUMING Stage 2 training from checkpoint...\n")
-        else:
-            print("\nStarting Stage 2 fine-tuning...\n")
-
-        # Train Stage 2
-        results_stage2 = model.train(
-            data=str(data_yaml_path),
-            epochs=100,
-            imgsz=256,
-            batch=32,
-            optimizer='SGD',
-            lr0=0.001,
-            lrf=0.01,
-            momentum=0.937,
-            weight_decay=0.0005,
-
-            # Moderate augmentation for fine-tuning
-            hsv_h=0.015,
-            hsv_s=0.6,
-            hsv_v=0.4,
-            fliplr=0.5,
-            flipud=0.5,
-            degrees=5.0,
-            shear=1.5,
-            scale=0.5,
             mosaic=0.5,
-
-            # Training settings
-            resume=resume_stage2,  # Resume from checkpoint if available
+            mixup=0.15,
+            copy_paste=0.0,
+            resume=resume_training,
+            amp=True,
             save=True,
-            save_period=-1,  # Only save best and last
-            project='runs/potholed',
-            name='stage2_256px',
+            save_period=-1,
+            project='runs',
+            name=train_name,
             exist_ok=True,
+            profile=True,
             verbose=True,
         )
 
-        # Get final best model
+        # Merge user-provided kwargs with defaults (user kwargs take precedence)
+        final_train_kwargs = {**default_train_kwargs, **train_kwargs}
+
+        # Print training configuration
+        print("\nTraining configuration:")
+        print(f"  Model: {yolo_model}")
+        print(f"  Training name: {train_name}")
+        print(f"  Epochs: {final_train_kwargs.get('epochs', 'N/A')}")
+        print(f"  Image size: {final_train_kwargs.get('imgsz', 'N/A')}")
+        print(f"  Batch size: {final_train_kwargs.get('batch', 'N/A')}")
+        print(f"  Precision: {'FP16 (mixed precision)' if final_train_kwargs.get('amp', False) else 'FP32'}")
+        print(f"  Learning rate: {final_train_kwargs.get('lr0', 'N/A')}")
+        print(f"  Momentum: {final_train_kwargs.get('momentum', 'N/A')}")
+        print(f"  Weight decay: {final_train_kwargs.get('weight_decay', 'N/A')}")
+        if final_train_kwargs.get('patience'):
+            print(f"  Early stopping patience: {final_train_kwargs.get('patience')}")
+        print("  Data augmentation:")
+        print(f"    - Horizontal flip: {final_train_kwargs.get('fliplr', 0)}")
+        print(f"    - Rotation: ±{final_train_kwargs.get('degrees', 0)}°")
+        print(f"    - Shear: ±{final_train_kwargs.get('shear', 0)}°")
+        print(f"    - HSV augmentation: h={final_train_kwargs.get('hsv_h', 0)}, s={final_train_kwargs.get('hsv_s', 0)}, v={final_train_kwargs.get('hsv_v', 0)}")
+        print(f"    - Scale: {final_train_kwargs.get('scale', 0)}")
+        print(f"    - Mosaic: {final_train_kwargs.get('mosaic', 0)}")
+        print(f"    - Mixup: {final_train_kwargs.get('mixup', 0)}")
+        print(f"    - Copy-paste: {final_train_kwargs.get('copy_paste', 0)}")
+
+        if resume_training:
+            print("\n▶️ RESUMING training from checkpoint...\n")
+        else:
+            print("\nStarting training...\n")
+
+        # Train model with merged parameters
+        results = model.train(**final_train_kwargs)
+
+        # Get best model
         best_model_path = Path(model.trainer.save_dir) / "weights" / "best.pt"
 
     print("\n" + "=" * 80)
-    print("STEP 5: Two-Stage Training Complete!")
+    print("✅ Training Complete!")
     print("=" * 80)
-
-    print(f"\n✅ Stage 1 model (640px): {best_stage1_path}")
-    print(f"✅ Stage 2 model (256px): {best_model_path}")
-    print(f"✅ Final model for deployment: {best_model_path}")
+    print(f"\n✅ Best model: {best_model_path}")
 
     # Print final metrics
-    if not skip_stage2 and hasattr(results_stage2, 'results_dict'):
-        metrics = results_stage2.results_dict
-        print("\nFinal metrics (Stage 2 at 256px):")
+    if results is not None and hasattr(results, 'results_dict'):
+        metrics = results.results_dict
+        # Get imgsz from train_kwargs or use default
+        imgsz = train_kwargs.get('imgsz', 416)
+        print(f"\nFinal metrics (at {imgsz}):")
         if 'metrics/precision(B)' in metrics:
             print(f"  Precision: {metrics['metrics/precision(B)']:.4f}")
         if 'metrics/recall(B)' in metrics:
@@ -510,50 +416,29 @@ def train_yolo11n(data_yaml_path: Path):
             print(f"  mAP@50: {metrics['metrics/mAP50(B)']:.4f}")
         if 'metrics/mAP50-95(B)' in metrics:
             print(f"  mAP@50-95: {metrics['metrics/mAP50-95(B)']:.4f}")
-    elif skip_stage2:
-        print("\n(Stage 2 was already complete - metrics available in training logs)")
-
-    print("\nTarget benchmarks from paper (YOLOv9-c at 640px):")
-    print("  Precision: 0.92")
-    print("  Recall: 0.90")
-    print("  mAP@50: 0.95")
-    print("  mAP@50-95: 0.64")
-    print("  F1-score: 0.91")
-
-    print("\nTwo-stage training benefits (with improvements):")
-    print("  ✅ Rich feature learning from 640px training (200 epochs)")
-    print("  ✅ Optimized for 256px deployment (matches cropped input, faster inference)")
-    print("  ✅ Better small object detection")
-    print("  ✅ Stronger augmentation increases generalization")
-    print("  ✅ Expected improvements: +10-15% mAP vs previous training")
-
-    print("\nNext steps:")
-    print("  1. Evaluate the model on test data")
-    print("  2. Export to ONNX format for TinyGrad conversion")
-    print("  3. Convert to TinyGrad pkl for deployment in potholed.py")
+    elif skip_training:
+        print("\n(Training was already complete - metrics available in training logs)")
 
     return best_model_path
 
 
-def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 256, half: bool = True) -> Path:
+def export_onnx(model_path: Path, imgsz: int = 512) -> Path:
     """
     Export trained model to ONNX (FP16 by default) and return the path.
 
     Args:
         model_path: Path to the trained .pt model
-        output_dir: Output directory for ONNX file (default: runs/potholed/stage3_export)
-        imgsz: Image size for export (default: 320)
-        half: If True, export FP16 ONNX; if False, export FP32 ONNX (default: True)
+        imgsz: Image size for export (default: 512)
     """
-    precision = "FP16" if half else "FP32"
+
+    precision = "FP16"
     print("\n" + "=" * 80)
     print(f"Exporting model to {precision} ONNX")
     print("=" * 80)
     print(f"\nSource model: {model_path}")
 
-    # Determine output directory
-    if output_dir is None:
-        output_dir = Path('runs/potholed/stage3_export')
+    # Output to same directory as model_path
+    output_dir = model_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model = YOLO(str(model_path))
@@ -563,19 +448,22 @@ def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 2
         simplify=True,
         dynamic=False,
         opset=12,
-        half=half,  # FP16 export
+        half=True,  # FP16 export
         verbose=False,
         project=str(output_dir),
-        name=f'onnx_{precision.lower()}'
+        name=None  # Use default naming (will create model.onnx in output_dir)
     )
 
     if isinstance(export_result, (str, Path)):
         onnx_path = Path(export_result)
     else:
-        onnx_path = output_dir / f'onnx_{precision.lower()}' / 'model.onnx'
+        # Default ONNX filename is model.onnx in the output directory
+        onnx_path = output_dir / 'model.onnx'
 
     if not onnx_path.exists():
-        alt_path = output_dir / f'onnx_{precision.lower()}.onnx'
+        # Try alternative naming based on model filename
+        model_stem = model_path.stem  # e.g., 'best' from 'best.pt'
+        alt_path = output_dir / f'{model_stem}.onnx'
         if alt_path.exists():
             onnx_path = alt_path
         else:
@@ -586,15 +474,10 @@ def export_onnx(model_path: Path, output_dir: Path | None = None, imgsz: int = 2
     return onnx_path
 
 def main():
-    """Main training pipeline"""
     print("\n" + "=" * 80)
-    print("YOLO11n Pothole Detection Training")
+    print("YOLO Pothole Detection Training")
     print("Dataset: Multi-Weather Pothole Detection (MWPD)")
     print("=" * 80)
-
-    # Set working directory to script location
-    script_dir = Path(__file__).parent
-    workspace_root = script_dir.parent
 
     # Download dataset
     dataset_path = download_dataset()
@@ -607,32 +490,34 @@ def main():
         sys.exit(1)
 
     # Prepare YOLO dataset
-    data_yaml_path = create_yolo_dataset(dataset_path, structure, workspace_root / "data")
+    data_yaml_path = create_yolo_dataset(dataset_path, structure, DATA_DIR)
 
-    # Train model (two-stage training)
-    best_model_path = train_yolo11n(data_yaml_path)
+    # Train model
+    variants = dict(
+        potholed_yolo11n_640=('yolo11n.pt', dict(imgsz=640)),
+        potholed_yolo11n_512=('yolo11n.pt', dict(imgsz=512)),
+        potholed_yolo11n_416=('yolo11n.pt', dict(imgsz=416)),
+        potholed_yolo11m_640=('yolo11m.pt', dict(imgsz=640)),
+        potholed_yolo11m_512=('yolo11m.pt', dict(imgsz=512)),
+        potholed_yolo11m_416=('yolo11m.pt', dict(imgsz=416)),
+        potholed_yolo11s_640=('yolo11s.pt', dict(imgsz=640)),
+        potholed_yolo11s_512=('yolo11s.pt', dict(imgsz=512)),
+        potholed_yolo11s_416=('yolo11s.pt', dict(imgsz=416)),
+    )
 
-    print("\n" + "=" * 80)
-    print("✅ TWO-STAGE TRAINING COMPLETE!")
-    print("=" * 80)
-    print(f"\nBest model: {best_model_path}")
+    for name, (model, kwargs) in variants.items():
+        best_model_path = train_yolo(name, data_yaml_path, model, **kwargs)
+        onnx_fp16_path = export_onnx(best_model_path, imgsz=512)
+        print(f"\nFP16 ONNX model: {onnx_fp16_path}")
 
-    # Export Stage 2 best model to FP16 ONNX for TinyGrad pipeline (FP16 for better performance)
-    print("\n" + "=" * 80)
-    print("Exporting Stage 2 best model to FP16 ONNX...")
-    print("=" * 80)
-    onnx_fp16_path = export_onnx(best_model_path, imgsz=256, half=True)
-    print(f"\nFP16 ONNX model: {onnx_fp16_path}")
-
-    # Copy the ONNX artifact into laica/potholed/models directory (do not delete existing models)
-    models_dir = script_dir.parent / 'models'
-    models_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = models_dir / Path(onnx_fp16_path).name
-    try:
-        shutil.copy2(onnx_fp16_path, dest_path)
-        print(f"\n✅ Copied model to: {dest_path}")
-    except Exception as e:
-        print(f"\n⚠️ Failed to copy model to {dest_path}: {e}")
+        # Copy the ONNX artifact into laica/potholed/models directory
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        dest_path = MODELS_DIR / Path(onnx_fp16_path).name
+        try:
+            shutil.copy2(onnx_fp16_path, dest_path)
+            print(f"\n✅ Copied model to: {dest_path}")
+        except Exception as e:
+            print(f"\n⚠️ Failed to copy model to {dest_path}: {e}")
 
     print("\n" + "=" * 80)
     print("✅ ALL DONE!")
