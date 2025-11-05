@@ -523,15 +523,15 @@ def main():
         potholed_yolo11s_416=('yolo11s.pt', dict(imgsz=416)),
     )
 
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
     for name, (model, kwargs) in variants.items():
         best_model_path = train_yolo(name, data_yaml_path, model, **kwargs)
         onnx_fp16_path = export_onnx(best_model_path, imgsz=512)
         print(f"\nFP16 ONNX model: {onnx_fp16_path}")
 
         # Copy the ONNX artifact into laica/potholed/models directory
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        dest_path = MODELS_DIR / Path(onnx_fp16_path).name
         try:
+            dest_path = MODELS_DIR / f"{name}.onnx"
             shutil.copy2(onnx_fp16_path, dest_path)
             print(f"\n✅ Copied model to: {dest_path}")
         except Exception as e:
